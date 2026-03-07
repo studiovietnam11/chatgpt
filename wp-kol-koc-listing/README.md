@@ -1,10 +1,18 @@
 # KOL KOC Listing Pro
 
-Plugin WordPress dành cho hệ thống listing KOL/KOC và địa điểm (nhà hàng, quán ăn, khách sạn, bệnh viện, trường học) tương thích ACF Premium.
+Plugin WordPress cho listing **KOL/KOC + địa điểm** (nhà hàng, quán ăn, khách sạn, bệnh viện, trường học), tương thích ACF Premium/Pro.
 
-## 1) Cấu trúc phân loại gợi ý chuẩn
+## Điểm nâng cấp chính
+- Hồ sơ KOL/KOC chi tiết: social metrics, audience, ngành hàng phù hợp, nền tảng social, lịch sử hợp tác/case study.
+- Breadcrumbs hoạt động cho: archive listing, taxonomy, single listing.
+- Tự tạo trang khi kích hoạt plugin:
+  - `Trang chủ Listing` (`[kkl_home]`)
+  - `Danh mục Listing` (`[kkl_archive]`)
+  - `Đăng Listing` (`[kkl_submit_form]`)
 
-### Danh mục chính (`listing_category`)
+## 1) Phân loại chuẩn nên dùng
+
+### Danh mục (`listing_category`)
 - KOL
 - KOC
 - Nhà hàng
@@ -13,62 +21,55 @@ Plugin WordPress dành cho hệ thống listing KOL/KOC và địa điểm (nhà
 - Bệnh viện
 - Trường học
 
-### Tiêu chí lọc (`listing_criteria`)
-Ví dụ theo nhu cầu vận hành:
-- Khu vực: miền bắc, miền trung, miền nam.
-- Mức giá: bình dân, tầm trung, cao cấp.
-- Hình thức nội dung: livestream, video ngắn, bài viết.
-- Dịch vụ: đặt bàn, take-away, bảo hiểm, nội trú...
+### Ngành hàng (`listing_industry`)
+- Mỹ phẩm, Thời trang, Mẹ & Bé, Ẩm thực, Công nghệ, Du lịch, Giáo dục, Sức khỏe
 
-## 2) Trường thông tin quan trọng (ACF)
-- Giá (`kkl_price`)
-- Địa chỉ (`kkl_address`)
-- Số điện thoại (`kkl_phone`)
-- Link mua (`kkl_buy_link`)
-- Link chat (`kkl_chat_link`)
-- Video URL (`kkl_video`)
-- Gallery (`kkl_gallery`)
-- FAQ ngắn (`kkl_faq`)
+### Nền tảng (`listing_platform`)
+- TikTok, Facebook, Instagram, YouTube, Shopee Live, Threads
+
+### Tiêu chí linh hoạt (`listing_criteria`)
+- Khu vực, mức giá, phong cách content, dịch vụ, hình thức hợp tác...
+
+## 2) Trường thông tin hồ sơ quan trọng
+- Cơ bản: giá, địa chỉ, phone, email, link mua, link chat, video, gallery, mô tả profile
+- Social: tổng followers, ER, avg views, avg reach
+- Tệp người theo dõi: location, age, gender
+- Fit: sản phẩm phù hợp, hình thức hợp tác, phong cách nội dung
+- Kinh nghiệm: lịch sử hợp tác (brand/campaign/kết quả)
+- Social account list: nền tảng + URL + followers từng kênh
 
 ## 3) Import Excel hàng loạt
 1. Vào `Listings > Import CSV`.
-2. Tải file mẫu: `sample-data/kkl-import-template.csv` (10 dòng dữ liệu).
-3. Điền dữ liệu trong Excel và lưu lại định dạng CSV UTF-8.
-4. Upload để import.
+2. Tải file mẫu: `sample-data/kkl-import-template.csv` (10 dòng).
+3. Điền dữ liệu trong Excel và lưu dạng CSV UTF-8.
+4. Upload file để import.
 
 ## 4) Avatar mặc định
-Nếu listing không có ảnh đại diện, plugin tự tạo ảnh SVG từ 2 ký tự đầu của tiêu đề.
+Không có ảnh đại diện sẽ tự sinh avatar từ 2 ký tự đầu của tiêu đề.
 
-## 5) Shortcode
-- Trang chủ listing: `[kkl_home]`
-- Trang danh mục/listing: `[kkl_archive]`
-- Form tìm kiếm/lọc: `[kkl_search]`
-- Form đăng listing frontend: `[kkl_submit_form]`
-- Hiển thị đơn theo ID: `[kkl_single id="123"]`
+## 5) Shortcodes
+- `[kkl_home]` – landing listing
+- `[kkl_archive]` – danh sách + lọc
+- `[kkl_search]` – search/filter form
+- `[kkl_submit_form]` – form đăng listing frontend
+- `[kkl_single id="123"]` – hiển thị bài đơn
 
 ## 6) Elementor
-Widget: **KKL Listing**
-- Chế độ Trang chủ
-- Chế độ Archive
-- Chế độ Search form
-- Chế độ Form đăng listing
+Widget: **KKL Listing** (home/archive/search/form).
 
 ## 7) Responsive
-- Mobile: 2 cột.
-- Tablet: 3 cột.
-- Desktop: 4 cột.
+- Mobile: 2 cột
+- Tablet: 3 cột
+- Desktop: 4 cột
 
-## 8) Breadcrumbs
-Plugin tạo breadcrumbs: `Trang chủ / Danh mục / Bài đơn` cho single listing.
+## 8) Trang đơn
+- Header thông tin chính + CTA (liên hệ/mua/chat/email)
+- Section rõ ràng: mô tả, chỉ số social, sản phẩm phù hợp, kênh social, lịch sử hợp tác, video, gallery, FAQ
+- Related listings: 12 bài cùng danh mục
+- Form liên hệ cuối trang
 
-## 9) Trang đơn
-- Header thông tin chính + nút Liên hệ / Mua hàng / Chat support.
-- Section rõ ràng: Mô tả, Video, Hình ảnh, FAQ ngắn.
-- Related listings: 12 bài cùng danh mục.
-- Form liên hệ ở cuối trang.
-
-## 10) Cài đặt nhanh
+## 9) Cài đặt nhanh
 1. Copy thư mục `wp-kol-koc-listing` vào `wp-content/plugins/`.
 2. Kích hoạt plugin.
-3. Đảm bảo đã bật **ACF Pro/Premium**.
-4. Tạo trang và chèn shortcode hoặc dùng Elementor widget.
+3. Bật **ACF Pro/Premium**.
+4. Dùng các trang tự tạo sẵn hoặc chèn shortcode / Elementor widget vào trang riêng.
