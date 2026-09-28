@@ -1,0 +1,228 @@
+name: Tranthibinh SPA Static Render
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  render:
+    if: github.event.issue.title == 'RUN_TRAN_THI_BINH_RENDER_V2'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Install parser
+        run: pip install requests beautifulsoup4
+
+      - name: Render all public routes
+        run: |
+          cat > /tmp/render.py <<'PY'
+          import os,re,csv,json,hashlib,subprocess,shutil,time
+          from pathlib import Path
+          from urllib.parse import urljoin,urlparse,urldefrag,unquote
+          import requests
+          from bs4 import BeautifulSoup
+
+          ORIGIN='https://tranthibinh.site'
+          OUT=Path('tranthibinh-static')
+          OUT.mkdir(exist_ok=True)
+          S=requests.Session(); S.headers.update({'User-Agent':'Mozilla/5.0 Chrome/153 Safari/537.36'})
+          seen=set(); q=['/']; pages=[]; sections=[]; asset_rows=[]; assets={}; broken=[]
+          ignore_prefix=('/api/','/wp-admin','/cdn-cgi/','/assets/','/images/','/favicon')
+          asset_ext={'.css','.js','.mjs','.json','.jpg','.jpeg','.png','.gif','.webp','.svg','.ico','.avif','.woff','.woff2','.ttf','.otf','.eot','.mp4','.webm','.mov','.mp3','.wav','.pdf'}
+
+          def route_norm(href,base):
+            if not href or href.startswith(('mailto:','tel:','javascript:','data:','#')): return None
+            u=urljoin(base,href); p=urlparse(u)
+            if p.hostname not in ('tranthibinh.site','www.tranthibinh.site'): return None
+            path=p.path or '/'
+            if any(path.startswith(x) for x in ignore_prefix): return None
+            if Path(path).suffix.lower() in asset_ext: return None
+            path=re.sub('/+','/',path)
+            if path!='/' and path.endswith('/'): path=path[:-1]
+            return path
+
+          def local_page(route):
+            if route=='/': return OUT/'index.html'
+            parts=[unquote(x) for x in route.strip('/').split('/') if x]
+            return OUT.joinpath(*parts,'index.html')
+
+          def safe_asset_path(url):
+            p=urlparse(url); parts=[x for x in p.path.strip('/').split('/') if x]
+            if not parts: parts=['asset']
+            if p.query:
+              h=hashlib.sha1(p.query.encode()).hexdigest()[:8]
+              stem=parts[-1]
+              if '.' in stem:
+                a,b=stem.rsplit('.',1); parts[-1]=f'{a}-{h}.{b}'
+              else: parts[-1]=stem+'-'+h
+            return OUT.joinpath(*parts)
+
+          def rel(frm,to): return os.path.relpath(to,frm.parent).replace(os.sep,'/')
+
+          cssurl=re.compile(r"url\((['\"]?)([^)'\"#]+)\1\)",re.I)
+          def dl_asset(url,ref):
+            absu=urljoin(ref,url)
+            if absu in assets: return assets[absu]
+            try:
+              r=S.get(absu,timeout=30)
+              if r.status_code>=400:
+                assets[absu]=None; asset_rows.append([absu,'',r.status_code,r.headers.get('content-type',''),ref]); return None
+              lp=safe_asset_path(absu); lp.parent.mkdir(parents=True,exist_ok=True)
+              data=r.content; lp.write_bytes(data); assets[absu]=lp
+              asset_rows.append([absu,str(lp.relative_to(OUT)),r.status_code,r.headers.get('content-type',''),ref])
+              if lp.suffix.lower()=='.css' or 'text/css' in r.headers.get('content-type',''):
+                txt=data.decode(r.encoding or 'utf-8',errors='replace')
+                def repl(m):
+                  t=m.group(2).strip()
+                  if t.startswith(('data:','blob:')): return m.group(0)
+                  child=dl_asset(t,absu)
+                  return "url('"+rel(lp,child)+"')" if child else m.group(0)
+                lp.write_text(cssurl.sub(repl,txt),encoding='utf-8')
+              return lp
+            except Exception as e:
+              assets[absu]=None; asset_rows.append([absu,'','ERR:'+repr(e),'',ref]); return None
+
+          def chrome_dom(url):
+            cmd=['google-chrome','--headless','--disable-gpu','--no-sandbox','--disable-dev-shm-usage','--virtual-time-budget=5000','--dump-dom',url]
+            p=subprocess.run(cmd,capture_output=True,text=True,timeout=40)
+            if p.returncode!=0 or '<html' not in p.stdout.lower():
+              raise RuntimeError((p.stderr or p.stdout)[-1000:])
+            return p.stdout
+
+          # Seed likely SPA routes found in JS bundle
+          try:
+            home=S.get(ORIGIN+'/',timeout=20).text
+            hs=BeautifulSoup(home,'html.parser')
+            for sc in hs.find_all('script',src=True):
+              jsu=urljoin(ORIGIN,sc['src'])
+              if urlparse(jsu).hostname in ('tranthibinh.site','www.tranthibinh.site'):
+                js=S.get(jsu,timeout=30).text
+                for m in re.finditer(r"['\"](/[^'\"?#]{1,100})['\"]",js):
+                  cand=m.group(1)
+                  if re.fullmatch(r'/[A-Za-z0-9_\-/]*',cand) and not any(cand.startswith(x) for x in ignore_prefix) and Path(cand).suffix=='' and cand.count('/')<=5:
+                    if cand not in q: q.append(cand.rstrip('/') or '/')
+          except Exception as e: print('seed js error',e)
+
+          MAX=250
+          while q and len(seen)<MAX:
+            route=q.pop(0)
+            if route in seen: continue
+            seen.add(route)
+            url=ORIGIN+route
+            try:
+              dom=chrome_dom(url)
+            except Exception as e:
+              print('RENDER_ERR',route,e); continue
+            soup=BeautifulSoup(dom,'html.parser')
+            # discover routes from rendered anchors
+            for a in soup.find_all('a',href=True):
+              r=route_norm(a['href'],url)
+              if r and r not in seen and r not in q: q.append(r)
+
+            lp=local_page(route); lp.parent.mkdir(parents=True,exist_ok=True)
+            # section inventory BEFORE modification
+            cands=[]
+            for sel in ['body > section','main > section','.elementor-section','.e-con.e-parent','[data-element_type="container"]','main > div','body > div > section']:
+              for el in soup.select(sel):
+                if el not in cands: cands.append(el)
+            if not cands and soup.body:
+              cands=[x for x in soup.body.find_all(recursive=False) if getattr(x,'name',None) in {'header','main','section','div','footer'}]
+            sc=0
+            for i,el in enumerate(cands,1):
+              t=' '.join(el.stripped_strings)
+              if len(t)<20 and not el.find(['img','video','iframe']): continue
+              sc+=1; h=el.find(['h1','h2','h3','h4']); title=(' '.join(h.stripped_strings) if h else t[:100])[:180]
+              sections.append([route,str(lp.relative_to(OUT)),i,el.name,el.get('id',''),' '.join(el.get('class') or [])[:200],title,len(t)])
+
+            # remove SPA/module scripts; retain static rendered DOM
+            for s in soup.find_all('script'):
+              s.decompose()
+            for b in soup.find_all('base'): b.decompose()
+
+            # rewrite internal links
+            for a in soup.find_all('a',href=True):
+              frag=urlparse(a['href']).fragment
+              r=route_norm(a['href'],url)
+              if r:
+                target=local_page(r)
+                a['href']=rel(lp,target)+(('#'+frag) if frag else '')
+
+            # download/rewrite assets
+            for tag,attrs in {'img':['src','data-src'],'link':['href'],'source':['src'],'video':['src','poster'],'audio':['src']}.items():
+              for el in soup.find_all(tag):
+                for at in attrs:
+                  v=el.get(at)
+                  if not v or v.startswith(('data:','blob:','#')): continue
+                  if tag=='link':
+                    rels={x.lower() for x in (el.get('rel') or [])}
+                    if not rels.intersection({'stylesheet','icon','shortcut','preload','apple-touch-icon','manifest','mask-icon'}): continue
+                  ap=dl_asset(v,url)
+                  if ap: el[at]=rel(lp,ap)
+            for el in soup.find_all(srcset=True):
+              out=[]
+              for item in el['srcset'].split(','):
+                bits=item.strip().split()
+                if not bits: continue
+                ap=dl_asset(bits[0],url)
+                if ap: bits[0]=rel(lp,ap)
+                out.append(' '.join(bits))
+              el['srcset']=', '.join(out)
+            for el in soup.find_all(style=True):
+              def ir(m):
+                ap=dl_asset(m.group(2).strip(),url)
+                return "url('"+rel(lp,ap)+"')" if ap else m.group(0)
+              el['style']=cssurl.sub(ir,el['style'])
+            for st in soup.find_all('style'):
+              if st.string:
+                def sr(m):
+                  ap=dl_asset(m.group(2).strip(),url)
+                  return "url('"+rel(lp,ap)+"')" if ap else m.group(0)
+                st.string.replace_with(cssurl.sub(sr,st.string))
+
+            # inject tiny static nav helper only
+            if soup.body:
+              helper=soup.new_tag('script')
+              helper.string="document.addEventListener('click',e=>{const b=e.target.closest('[aria-expanded]');if(b){const id=b.getAttribute('aria-controls');const t=id&&document.getElementById(id);if(t){const o=b.getAttribute('aria-expanded')==='true';b.setAttribute('aria-expanded',String(!o));t.hidden=o;}}});"
+              soup.body.append(helper)
+
+            title=soup.title.get_text(' ',strip=True) if soup.title else ''
+            lp.write_text('<!doctype html>\n'+str(soup),encoding='utf-8')
+            pages.append([route,url,str(lp.relative_to(OUT)),title,sc,len(dom)])
+            print('PAGE',len(pages),route,'sections',sc,'queue',len(q))
+
+          # QA local refs
+          for row in pages:
+            fp=OUT/row[2]
+            s=BeautifulSoup(fp.read_text(encoding='utf-8',errors='replace'),'html.parser')
+            for tag,at in [('a','href'),('img','src'),('link','href'),('source','src'),('video','src'),('audio','src')]:
+              for n in s.find_all(tag):
+                v=n.get(at)
+                if not v or v.startswith(('http://','https://','//','mailto:','tel:','javascript:','data:','blob:','#')): continue
+                target=v.split('#',1)[0].split('?',1)[0]
+                if not target: continue
+                d=(fp.parent/target).resolve()
+                try: d.relative_to(OUT.resolve())
+                except: continue
+                if not d.exists(): broken.append([row[0],tag,at,v])
+
+          def csvwrite(name,head,rows):
+            with (OUT/name).open('w',newline='',encoding='utf-8-sig') as f:
+              w=csv.writer(f); w.writerow(head); w.writerows(rows)
+          csvwrite('PAGE-INVENTORY.csv',['route','url','local','title','sections','dom_chars'],pages)
+          csvwrite('SECTION-MATRIX.csv',['route','local','index','tag','id','class','title','text_chars'],sections)
+          csvwrite('ASSET-MAP.csv',['source_url','local','status','content_type','referrer'],asset_rows)
+          csvwrite('QA-REPORT.csv',['route','tag','attr','broken_target'],broken)
+          report={'pages_total':len(pages),'sections_total':len(sections),'assets_total':sum(1 for v in assets.values() if v),'broken_local_refs':len(broken),'routes_seen':len(seen)}
+          (OUT/'CLONE-REPORT.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
+          (OUT/'README.txt').write_text('Static rendered mirror of https://tranthibinh.site/\nOpen index.html directly.\n',encoding='utf-8')
+          print('SUMMARY',json.dumps(report))
+          shutil.make_archive('tranthibinh-static-html','zip',root_dir=OUT)
+          PY
+          python /tmp/render.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tranthibinh-static-html-v2
+          path: tranthibinh-static-html.zip
+          retention-days: 1
