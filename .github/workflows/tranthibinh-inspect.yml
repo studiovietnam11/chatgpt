@@ -7,6 +7,8 @@ jobs:
     if: github.event.issue.title == 'RUN_TRAN_THI_BINH_INSPECT'
     runs-on: ubuntu-latest
     steps:
+      - name: Install parser
+        run: pip install requests beautifulsoup4
       - name: Inspect bundle routing
         run: |
           python - <<'PY'
@@ -24,19 +26,18 @@ jobs:
             while True:
               i=js.find(n,pos)
               if i<0: break
-              count+=1; print('\nNEEDLE',n,'#',count,'@',i); print(js[max(0,i-500):i+700])
+              count+=1; print('\nNEEDLE',n,'#',count,'@',i); print(js[max(0,i-800):i+1200])
               pos=i+len(n)
               if count>=5: break
           print('\nROUTEISH_STRINGS')
           vals=set()
-          for m in re.finditer(r'(["\'])(.{1,120}?)\1',js):
+          for m in re.finditer(r'(["\'])(.{1,160}?)\1',js):
             v=m.group(2)
-            if any(k.lower() in v.lower() for k in ['product','journal','about','resource','store','shop','license','faq','login','cart','free','home']) or (v.startswith('/') and len(v)<100):
-              vals.add(v)
-          for v in sorted(vals)[:500]: print(repr(v))
+            if any(k.lower() in v.lower() for k in ['product','journal','about','resource','store','shop','license','faq','login','cart','free','home']) or (v.startswith('/') and len(v)<120): vals.add(v)
+          for v in sorted(vals)[:1000]: print(repr(v))
           print('\nNAV_PATTERNS')
-          for pat in ['pushState','popstate','location.pathname','navigate','setPage','activePage','currentPage','view','section']:
+          for pat in ['pushState','popstate','location.pathname','navigate','setPage','activePage','currentPage','view','section','onNavigate','setView']:
             print('\nPAT',pat)
-            for m in list(re.finditer(re.escape(pat),js,re.I))[:8]:
-              i=m.start(); print(js[max(0,i-250):i+450])
+            for m in list(re.finditer(re.escape(pat),js,re.I))[:12]:
+              i=m.start(); print(js[max(0,i-500):i+900])
           PY
