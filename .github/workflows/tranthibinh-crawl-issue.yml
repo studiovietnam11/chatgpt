@@ -1,0 +1,99 @@
+name: Tranthibinh Crawl Issue Trigger
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  crawl:
+    if: github.event.issue.title == 'RUN_TRAN_THI_BINH_STATIC_CRAWL'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Crawl full site with wget
+        run: |
+          set -e
+          mkdir -p work
+          cd work
+          wget \
+            --mirror \
+            --recursive \
+            --level=inf \
+            --page-requisites \
+            --convert-links \
+            --adjust-extension \
+            --span-hosts \
+            --domains=tranthibinh.site,www.tranthibinh.site \
+            --no-parent \
+            --execute robots=off \
+            --user-agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/153 Safari/537.36' \
+            --timeout=30 \
+            --tries=2 \
+            --wait=0.05 \
+            https://tranthibinh.site/ || true
+          cd ..
+          python - <<'PY'
+          from pathlib import Path
+          import csv, json, re, shutil
+          from bs4 import BeautifulSoup
+          root=Path('work/tranthibinh.site')
+          if not root.exists():
+              raise SystemExit('CRAWL_FAILED_NO_SITE_DIR')
+          pages=[]; sections=[]; assets=[]; broken=[]
+          for p in root.rglob('*'):
+              if not p.is_file(): continue
+              rel=p.relative_to(root).as_posix()
+              ext=p.suffix.lower()
+              if ext in {'.html','.htm'}:
+                  try:
+                      txt=p.read_text(encoding='utf-8',errors='replace')
+                      soup=BeautifulSoup(txt,'html.parser')
+                      title=(soup.title.get_text(' ',strip=True) if soup.title else '')
+                      cands=[]
+                      for sel in ['body > section','main > section','.elementor-section','.e-con.e-parent','[data-element_type="container"]','main > div']:
+                          for el in soup.select(sel):
+                              if el not in cands: cands.append(el)
+                      if not cands and soup.body:
+                          cands=[x for x in soup.body.find_all(recursive=False) if getattr(x,'name',None) in {'header','main','section','div','footer'}]
+                      sc=0
+                      for i,el in enumerate(cands,1):
+                          t=' '.join(el.stripped_strings)
+                          if len(t)<20 and not el.find(['img','video','iframe']): continue
+                          sc+=1
+                          h=el.find(['h1','h2','h3','h4'])
+                          heading=(' '.join(h.stripped_strings) if h else t[:100])[:180]
+                          sections.append([rel,i,el.name,el.get('id',''),' '.join(el.get('class') or [])[:200],heading,len(t)])
+                      pages.append([rel,title,sc,p.stat().st_size])
+                      for tag,attr in [('a','href'),('img','src'),('script','src'),('link','href'),('source','src'),('video','src'),('audio','src')]:
+                          for n in soup.find_all(tag):
+                              v=n.get(attr)
+                              if not v or v.startswith(('http://','https://','//','mailto:','tel:','javascript:','data:','blob:','#')): continue
+                              target=v.split('#',1)[0].split('?',1)[0]
+                              if not target: continue
+                              dest=(p.parent/target).resolve()
+                              try: dest.relative_to(root.resolve())
+                              except: continue
+                              if not dest.exists(): broken.append([rel,tag,attr,v])
+                  except Exception as e:
+                      pages.append([rel,'ERROR:'+repr(e),0,p.stat().st_size])
+              else:
+                  assets.append([rel,p.stat().st_size,ext])
+          with (root/'PAGE-INVENTORY.csv').open('w',newline='',encoding='utf-8-sig') as f:
+              w=csv.writer(f); w.writerow(['local','title','sections','bytes']); w.writerows(pages)
+          with (root/'SECTION-MATRIX.csv').open('w',newline='',encoding='utf-8-sig') as f:
+              w=csv.writer(f); w.writerow(['page','index','tag','id','class','title','text_chars']); w.writerows(sections)
+          with (root/'ASSET-MAP.csv').open('w',newline='',encoding='utf-8-sig') as f:
+              w=csv.writer(f); w.writerow(['local','bytes','ext']); w.writerows(assets)
+          with (root/'QA-REPORT.csv').open('w',newline='',encoding='utf-8-sig') as f:
+              w=csv.writer(f); w.writerow(['page','tag','attr','broken_target']); w.writerows(broken)
+          report={'pages_total':len(pages),'sections_total':len(sections),'assets_total':len(assets),'broken_local_refs':len(broken)}
+          (root/'CLONE-REPORT.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
+          print('SUMMARY',json.dumps(report))
+          shutil.make_archive('tranthibinh-static-html','zip',root_dir=root)
+          PY
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tranthibinh-static-html
+          path: tranthibinh-static-html.zip
+          retention-days: 1
