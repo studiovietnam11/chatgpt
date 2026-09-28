@@ -1,0 +1,409 @@
+name: Tranthibinh Full Static Crawl
+
+on:
+  push:
+    paths:
+      - ".github/workflows/tranthibinh-crawl.yml"
+
+jobs:
+  crawl:
+    if: github.event.head_commit.message == 'run tranthibinh crawl'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Prepare crawler
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4 lxml
+          cat > /tmp/crawl.py <<'PY'
+          import os, re, csv, json, time, hashlib, mimetypes, shutil
+          from pathlib import Path
+          from urllib.parse import urljoin, urlparse, urlunparse, unquote
+          import requests
+          from bs4 import BeautifulSoup
+          from xml.etree import ElementTree as ET
+
+          START = "https://tranthibinh.site/"
+          OUT = Path("tranthibinh-static")
+          OUT.mkdir(parents=True, exist_ok=True)
+          MAX_PAGES = 500
+          MAX_ASSET = 40 * 1024 * 1024
+          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/153 Safari/537.36"
+
+          s = requests.Session()
+          s.headers.update({"User-Agent": UA, "Accept-Language": "vi-VN,vi;q=0.9,en;q=0.8"})
+
+          root_host = urlparse(START).hostname.lower()
+          allowed_hosts = {root_host, "www."+root_host if not root_host.startswith("www.") else root_host[4:]}
+          page_exts = {"", ".html", ".htm", ".php", ".asp", ".aspx", ".jsp"}
+          asset_exts = {".css",".js",".mjs",".json",".xml",".jpg",".jpeg",".png",".gif",".webp",".svg",".ico",".avif",".bmp",".tif",".tiff",".woff",".woff2",".ttf",".otf",".eot",".mp4",".webm",".mov",".mp3",".wav",".pdf",".zip",".rar",".7z",".doc",".docx",".xls",".xlsx",".ppt",".pptx"}
+
+          def strip_fragment(u):
+              p=urlparse(u)
+              return urlunparse((p.scheme,p.netloc,p.path,p.params,p.query,""))
+
+          def normalize_url(u, base=START):
+              u=urljoin(base,u)
+              p=urlparse(u)
+              scheme = p.scheme or "https"
+              host=(p.hostname or "").lower()
+              if host in allowed_hosts:
+                  netloc=root_host
+              else:
+                  netloc=p.netloc
+              path=re.sub(r"/{2,}","/",p.path or "/")
+              query = "" if host in allowed_hosts else p.query
+              return urlunparse((scheme,netloc,path,p.params,query,""))
+
+          def is_same_origin(u):
+              return (urlparse(u).hostname or "").lower() in allowed_hosts
+
+          def safe_seg(x):
+              x=unquote(x)
+              x=x.replace("\\","_").replace(":","_").replace("*","_").replace("?","_").replace('"',"_").replace("<","_").replace(">","_").replace("|","_")
+              return x or "_"
+
+          def local_page_path(u):
+              p=urlparse(u)
+              path=p.path or "/"
+              if path.endswith("/"):
+                  return OUT / Path(*[safe_seg(x) for x in path.strip("/").split("/") if x]) / "index.html"
+              ext=Path(path).suffix.lower()
+              if ext in {".html",".htm"}:
+                  return OUT / Path(*[safe_seg(x) for x in path.strip("/").split("/") if x])
+              if ext and ext not in page_exts:
+                  return OUT / Path(*[safe_seg(x) for x in path.strip("/").split("/") if x])
+              parts=[safe_seg(x) for x in path.strip("/").split("/") if x]
+              return OUT / Path(*parts) / "index.html"
+
+          def local_asset_path(u):
+              p=urlparse(u)
+              host=(p.hostname or "unknown").lower()
+              parts=[safe_seg(x) for x in p.path.strip("/").split("/") if x]
+              if not parts or p.path.endswith("/"):
+                  parts.append("index")
+              if p.query:
+                  stem=parts[-1]
+                  qh=hashlib.sha1(p.query.encode()).hexdigest()[:8]
+                  if "." in stem:
+                      a,b=stem.rsplit(".",1); parts[-1]=f"{a}-{qh}.{b}"
+                  else:
+                      parts[-1]=f"{stem}-{qh}"
+              if host in allowed_hosts:
+                  return OUT / Path(*parts)
+              return OUT / "_external" / safe_seg(host) / Path(*parts)
+
+          def rel_href(from_file, to_file, frag=""):
+              rel=os.path.relpath(to_file, start=from_file.parent).replace(os.sep,"/")
+              return rel + (("#"+frag) if frag else "")
+
+          assets = {}
+          asset_rows=[]
+          pages={}
+          section_rows=[]
+          queue=[]
+          seen=set()
+
+          def enqueue_page(u):
+              u=normalize_url(u)
+              if not is_same_origin(u): return
+              p=urlparse(u)
+              ext=Path(p.path).suffix.lower()
+              if ext in asset_exts: return
+              if u not in seen and u not in queue:
+                  queue.append(u)
+
+          def download_asset(u, ref=None):
+              u=normalize_url(u, ref or START)
+              if u in assets:
+                  return assets[u]
+              lp=local_asset_path(u)
+              lp.parent.mkdir(parents=True,exist_ok=True)
+              try:
+                  r=s.get(u,timeout=30,stream=True,allow_redirects=True)
+                  ct=(r.headers.get("content-type") or "").lower()
+                  if r.status_code>=400:
+                      asset_rows.append([u,str(lp.relative_to(OUT)),r.status_code,ct,ref or ""])
+                      assets[u]=None
+                      return None
+                  cl=int(r.headers.get("content-length") or 0)
+                  if cl and cl>MAX_ASSET:
+                      asset_rows.append([u,str(lp.relative_to(OUT)),"SKIP_LARGE",ct,ref or ""])
+                      assets[u]=None
+                      return None
+                  data=r.content
+                  if len(data)>MAX_ASSET:
+                      asset_rows.append([u,str(lp.relative_to(OUT)),"SKIP_LARGE",ct,ref or ""])
+                      assets[u]=None
+                      return None
+                  if lp.suffix=="":
+                      guess=mimetypes.guess_extension(ct.split(";")[0].strip()) or ""
+                      if guess:
+                          lp=lp.with_suffix(guess)
+                  lp.write_bytes(data)
+                  assets[u]=lp
+                  asset_rows.append([u,str(lp.relative_to(OUT)),r.status_code,ct,ref or ""])
+                  if "text/css" in ct or lp.suffix.lower()==".css":
+                      try:
+                          css=data.decode(r.encoding or "utf-8",errors="replace")
+                          css2=rewrite_css(css,u,lp)
+                          lp.write_text(css2,encoding="utf-8")
+                      except Exception:
+                          pass
+                  return lp
+              except Exception as e:
+                  asset_rows.append([u,str(lp.relative_to(OUT)),"ERR:"+repr(e), "", ref or ""])
+                  assets[u]=None
+                  return None
+
+          css_url_re=re.compile(r"url\((['\"]?)([^)'\"#][^)'\"\n]*)\1\)",re.I)
+          css_import_re=re.compile(r"@import\s+(?:url\()?['\"]([^'\"]+)['\"]\)?",re.I)
+
+          def rewrite_css(css, base_url, css_local):
+              def repl(m):
+                  target=m.group(2).strip()
+                  if target.startswith(("data:","blob:","#")): return m.group(0)
+                  absu=normalize_url(target,base_url)
+                  lp=download_asset(absu,base_url)
+                  if not lp: return m.group(0)
+                  return f"url('{rel_href(css_local,lp)}')"
+              css=css_url_re.sub(repl,css)
+              for imp in list(css_import_re.finditer(css)):
+                  target=imp.group(1)
+                  absu=normalize_url(target,base_url)
+                  lp=download_asset(absu,base_url)
+                  if lp:
+                      css=css.replace(target,rel_href(css_local,lp))
+              return css
+
+          def process_srcset(val, page_url, page_local):
+              outs=[]
+              for item in val.split(","):
+                  item=item.strip()
+                  if not item: continue
+                  bits=item.split()
+                  target=bits[0]
+                  if target.startswith(("data:","blob:")):
+                      outs.append(item); continue
+                  lp=download_asset(target,page_url)
+                  bits[0]=rel_href(page_local,lp) if lp else target
+                  outs.append(" ".join(bits))
+              return ", ".join(outs)
+
+          def process_html(html, page_url, page_local):
+              soup=BeautifulSoup(html,"lxml")
+              for b in soup.find_all("base"): b.decompose()
+
+              asset_attrs = {
+                  "img":["src","data-src","data-lazy-src"],
+                  "script":["src"],
+                  "link":["href"],
+                  "source":["src"],
+                  "video":["src","poster"],
+                  "audio":["src"],
+                  "iframe":["src"],
+                  "input":["src"],
+              }
+
+              for tag,attrs in asset_attrs.items():
+                  for el in soup.find_all(tag):
+                      for a in attrs:
+                          v=el.get(a)
+                          if not v or v.startswith(("data:","blob:","javascript:","mailto:","tel:","#")): continue
+                          if tag=="link" and a=="href":
+                              rels={x.lower() for x in (el.get("rel") or [])}
+                              if not (rels & {"stylesheet","icon","shortcut","preload","prefetch","apple-touch-icon","manifest","mask-icon"}):
+                                  continue
+                          absu=normalize_url(v,page_url)
+                          if tag=="iframe" and is_same_origin(absu):
+                              enqueue_page(absu)
+                              el[a]=rel_href(page_local, local_page_path(absu))
+                              continue
+                          lp=download_asset(absu,page_url)
+                          if lp: el[a]=rel_href(page_local,lp)
+
+              for el in soup.find_all(srcset=True):
+                  el["srcset"]=process_srcset(el["srcset"],page_url,page_local)
+              for el in soup.find_all(attrs={"data-srcset":True}):
+                  el["data-srcset"]=process_srcset(el["data-srcset"],page_url,page_local)
+
+              for el in soup.find_all(style=True):
+                  el["style"]=rewrite_css(el.get("style",""),page_url,page_local)
+              for st in soup.find_all("style"):
+                  if st.string:
+                      st.string.replace_with(rewrite_css(st.string,page_url,page_local))
+
+              for a in soup.find_all("a",href=True):
+                  v=a["href"].strip()
+                  if not v or v.startswith(("mailto:","tel:","javascript:","data:","#")): continue
+                  frag=urlparse(v).fragment
+                  absu=normalize_url(strip_fragment(v),page_url)
+                  if is_same_origin(absu):
+                      ext=Path(urlparse(absu).path).suffix.lower()
+                      if ext in asset_exts:
+                          lp=download_asset(absu,page_url)
+                          if lp: a["href"]=rel_href(page_local,lp,frag)
+                      else:
+                          enqueue_page(absu)
+                          a["href"]=rel_href(page_local,local_page_path(absu),frag)
+
+              for f in soup.find_all("form",action=True):
+                  act=f["action"]
+                  if act.startswith("/"):
+                      f["action"]=urljoin(START,act)
+
+              for m in soup.find_all("meta",content=True):
+                  key=(m.get("property") or m.get("name") or "").lower()
+                  if key in {"og:image","twitter:image","twitter:image:src"}:
+                      lp=download_asset(m["content"],page_url)
+                      if lp: m["content"]=rel_href(page_local,lp)
+
+              return "<!doctype html>\n"+str(soup)
+
+          def section_inventory(html, page_url):
+              soup=BeautifulSoup(html,"lxml")
+              candidates=[]
+              selectors=["body > section","main > section",".elementor-section",".e-con.e-parent","[data-element_type='container']","main > div"]
+              for sel in selectors:
+                  for el in soup.select(sel):
+                      if el not in candidates: candidates.append(el)
+              if not candidates:
+                  body=soup.body
+                  if body:
+                      candidates=[x for x in body.find_all(recursive=False) if getattr(x,"name",None) in {"header","main","section","div","footer"}]
+              rows=[]
+              for i,el in enumerate(candidates,1):
+                  txt=" ".join(el.stripped_strings)
+                  if len(txt)<20 and not el.find(["img","video","iframe"]): continue
+                  h=el.find(["h1","h2","h3","h4"])
+                  title=(" ".join(h.stripped_strings) if h else txt[:100]).strip()
+                  cls=" ".join(el.get("class") or [])
+                  rows.append({"index":i,"tag":el.name,"id":el.get("id",""),"class":cls[:200],"title":title[:180],"text_chars":len(txt)})
+              return rows
+
+          def discover_sitemaps():
+              todo=[urljoin(START,x) for x in ["wp-sitemap.xml","sitemap_index.xml","sitemap.xml"]]
+              done=set()
+              while todo and len(done)<30:
+                  u=todo.pop(0)
+                  if u in done: continue
+                  done.add(u)
+                  try:
+                      r=s.get(u,timeout=20)
+                      if r.status_code>=400 or ("xml" not in (r.headers.get("content-type") or "").lower() and not r.text.lstrip().startswith("<")):
+                          continue
+                      root=ET.fromstring(r.content)
+                      locs=[e.text.strip() for e in root.iter() if e.tag.lower().endswith("loc") and e.text]
+                      for loc in locs:
+                          if loc.lower().endswith(".xml"):
+                              todo.append(loc)
+                          elif is_same_origin(loc):
+                              enqueue_page(loc)
+                  except Exception:
+                      pass
+
+          discover_sitemaps()
+          enqueue_page(START)
+
+          while queue and len(pages)<MAX_PAGES:
+              u=queue.pop(0)
+              if u in seen: continue
+              seen.add(u)
+              try:
+                  r=s.get(u,timeout=30,allow_redirects=True)
+                  ct=(r.headers.get("content-type") or "").lower()
+                  if r.status_code>=400:
+                      pages[u]={"status":r.status_code,"error":"http","local":""}
+                      continue
+                  if "text/html" not in ct and not r.text.lstrip().lower().startswith(("<!doctype html","<html")):
+                      download_asset(u,START)
+                      continue
+                  final=normalize_url(r.url)
+                  if is_same_origin(final): u=final
+                  lp=local_page_path(u)
+                  lp.parent.mkdir(parents=True,exist_ok=True)
+                  original=r.text
+                  inv=section_inventory(original,u)
+                  rewritten=process_html(original,u,lp)
+                  lp.write_text(rewritten,encoding="utf-8")
+                  title=""
+                  try:
+                      sp=BeautifulSoup(original,"lxml")
+                      title=(sp.title.string or "").strip() if sp.title and sp.title.string else ""
+                  except: pass
+                  pages[u]={"status":r.status_code,"local":str(lp.relative_to(OUT)),"title":title,"sections":len(inv),"bytes":len(r.content)}
+                  for row in inv:
+                      section_rows.append([u,str(lp.relative_to(OUT)),row["index"],row["tag"],row["id"],row["class"],row["title"],row["text_chars"]])
+                  print(f"[PAGE {len(pages)+1}] {r.status_code} {u} -> {lp} sections={len(inv)} bytes={len(r.content)}")
+                  time.sleep(0.08)
+              except Exception as e:
+                  pages[u]={"status":"ERR","error":repr(e),"local":""}
+                  print("ERR",u,e)
+
+          with (OUT/"PAGE-INVENTORY.csv").open("w",newline="",encoding="utf-8-sig") as f:
+              w=csv.writer(f); w.writerow(["url","status","local","title","sections","bytes","error"])
+              for u,v in pages.items():
+                  w.writerow([u,v.get("status"),v.get("local",""),v.get("title",""),v.get("sections",""),v.get("bytes",""),v.get("error","")])
+          with (OUT/"SECTION-MATRIX.csv").open("w",newline="",encoding="utf-8-sig") as f:
+              w=csv.writer(f); w.writerow(["url","local","section_index","tag","id","class","title","text_chars"]); w.writerows(section_rows)
+          with (OUT/"ASSET-MAP.csv").open("w",newline="",encoding="utf-8-sig") as f:
+              w=csv.writer(f); w.writerow(["source_url","local","status","content_type","referrer"]); w.writerows(asset_rows)
+          (OUT/"page-inventory.json").write_text(json.dumps(pages,ensure_ascii=False,indent=2),encoding="utf-8")
+
+          broken=[]
+          checked=0
+          for u,v in pages.items():
+              if not v.get("local"): continue
+              fp=OUT/v["local"]
+              try: soup=BeautifulSoup(fp.read_text(encoding="utf-8"),"lxml")
+              except: continue
+              for el,attr in [("a","href"),("img","src"),("script","src"),("link","href"),("source","src"),("video","src"),("audio","src")]:
+                  for node in soup.find_all(el):
+                      val=node.get(attr)
+                      if not val or val.startswith(("http://","https://","mailto:","tel:","javascript:","data:","blob:","#","//")): continue
+                      target=val.split("#",1)[0].split("?",1)[0]
+                      if not target: continue
+                      checked+=1
+                      dest=(fp.parent/target).resolve()
+                      try:
+                          dest.relative_to(OUT.resolve())
+                      except:
+                          continue
+                      if not dest.exists():
+                          broken.append([v["local"],el,attr,val])
+          with (OUT/"QA-REPORT.csv").open("w",newline="",encoding="utf-8-sig") as f:
+              w=csv.writer(f); w.writerow(["page","tag","attr","broken_target"]); w.writerows(broken)
+
+          report = {
+              "source": START,
+              "pages_total": len(pages),
+              "pages_ok": sum(1 for v in pages.values() if isinstance(v.get("status"),int) and v["status"]<400),
+              "assets_attempted": len(asset_rows),
+              "sections_detected": len(section_rows),
+              "local_refs_checked": checked,
+              "broken_local_refs": len(broken),
+              "generated_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime()),
+          }
+          (OUT/"CLONE-REPORT.json").write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding="utf-8")
+          (OUT/"README.txt").write_text(
+              "TRAN THI BINH STATIC MIRROR\n"
+              "Source: "+START+"\n"
+              "Open index.html directly.\n"
+              "See PAGE-INVENTORY.csv, SECTION-MATRIX.csv, ASSET-MAP.csv and QA-REPORT.csv for audit.\n",
+              encoding="utf-8"
+          )
+
+          print("SUMMARY",json.dumps(report,ensure_ascii=False))
+          shutil.make_archive("tranthibinh-static-html","zip",root_dir=".",base_dir="tranthibinh-static")
+          PY
+
+      - name: Crawl full site
+        run: python /tmp/crawl.py
+
+      - name: Upload static site
+        uses: actions/upload-artifact@v4
+        with:
+          name: tranthibinh-static-html
+          path: tranthibinh-static-html.zip
+          if-no-files-found: error
+          retention-days: 1
