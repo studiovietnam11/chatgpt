@@ -1,0 +1,30 @@
+name: Tranthibinh Top Audit
+on:
+  push:
+    paths:
+      - '.github/workflows/tranthibinh-top-audit.yml'
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - run: pip install selenium
+      - name: Capture top audit
+        run: |
+          python - <<'PY'
+          import json,time
+          from selenium import webdriver
+          from selenium.webdriver.chrome.options import Options
+          o=Options();o.add_argument('--headless=new');o.add_argument('--no-sandbox');o.add_argument('--disable-dev-shm-usage');o.add_argument('--window-size=1440,1400')
+          d=webdriver.Chrome(options=o);d.get('https://tranthibinh.site/');time.sleep(3)
+          data=d.execute_script('''const h=document.querySelector('header');const r=h?h.parentElement:document.body;return [...r.children].slice(0,8).map((x,i)=>({i,tag:x.tagName,cls:x.className,text:(x.innerText||'').replace(/\\s+/g,' ').trim(),html:x.outerHTML}));''')
+          open('top-audit.json','w').write(json.dumps(data,ensure_ascii=False,indent=2))
+          d.save_screenshot('live-home.png')
+          d.quit()
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tranthibinh-top-audit
+          path: |
+            top-audit.json
+            live-home.png
+          retention-days: 1
