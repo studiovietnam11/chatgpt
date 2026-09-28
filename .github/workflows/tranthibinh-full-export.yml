@@ -1,0 +1,259 @@
+name: Tranthibinh Full SPA Export
+on:
+  issues:
+    types: [opened]
+jobs:
+  export:
+    if: github.event.issue.title == 'RUN_TRAN_THI_BINH_FULL_EXPORT'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Install tools
+        run: pip install selenium requests beautifulsoup4
+      - name: Export all SPA states
+        run: |
+          cat > /tmp/export.py <<'PY'
+          import os,re,csv,json,time,hashlib,shutil
+          from pathlib import Path
+          from urllib.parse import urljoin,urlparse
+          import requests
+          from bs4 import BeautifulSoup
+          from selenium import webdriver
+          from selenium.webdriver.common.by import By
+          from selenium.webdriver.chrome.options import Options
+          from selenium.webdriver.support.ui import WebDriverWait
+          from selenium.webdriver.support import expected_conditions as EC
+
+          ORIGIN='https://tranthibinh.site/'
+          OUT=Path('tranthibinh-static'); OUT.mkdir(exist_ok=True)
+          S=requests.Session(); S.headers.update({'User-Agent':'Mozilla/5.0 Chrome/153 Safari/537.36'})
+          opts=Options(); opts.add_argument('--headless=new'); opts.add_argument('--no-sandbox'); opts.add_argument('--disable-dev-shm-usage'); opts.add_argument('--disable-gpu'); opts.add_argument('--window-size=1440,1200')
+          d=webdriver.Chrome(options=opts)
+          wait=WebDriverWait(d,20)
+          pages=[]; sections=[]; assets={}; asset_rows=[]
+
+          def slug(s):
+            import unicodedata
+            s=unicodedata.normalize('NFKD',s).encode('ascii','ignore').decode().lower()
+            s=re.sub(r'[^a-z0-9]+','-',s).strip('-')
+            return s[:80] or 'item'
+
+          def click_text(text, contains=False, index=0):
+            # click visible button by normalized text
+            js='''const txt=arguments[0], contains=arguments[1], idx=arguments[2];
+              const els=[...document.querySelectorAll('button')].filter(b=>{
+                const t=(b.innerText||b.textContent||'').replace(/\\s+/g,' ').trim();
+                return b.offsetParent!==null && (contains?t.includes(txt):t===txt);
+              });
+              if(!els[idx]) return {ok:false,count:els.length,texts:els.map(x=>(x.innerText||'').trim())};
+              els[idx].scrollIntoView({block:'center'}); els[idx].click(); return {ok:true,count:els.length,text:(els[idx].innerText||'').trim()};'''
+            r=d.execute_script(js,text,contains,index)
+            time.sleep(.8)
+            return r
+
+          def open_home():
+            d.get(ORIGIN); wait.until(lambda x: x.execute_script('return document.readyState')=='complete'); time.sleep(1.2)
+
+          def capture(kind,name,path):
+            html=d.page_source
+            soup=BeautifulSoup(html,'html.parser')
+            # remove runtime scripts, keep DOM snapshot
+            for x in soup.find_all('script'): x.decompose()
+            for x in soup.find_all('base'): x.decompose()
+            fp=OUT/path; fp.parent.mkdir(parents=True,exist_ok=True)
+            # section inventory
+            cands=[]
+            for sel in ['main > section','main section','body > section','.fixed.inset-0']:
+              for el in soup.select(sel):
+                if el not in cands: cands.append(el)
+            sc=0
+            for i,el in enumerate(cands,1):
+              txt=' '.join(el.stripped_strings)
+              if len(txt)<20 and not el.find(['img','video','iframe']): continue
+              sc+=1; h=el.find(['h1','h2','h3','h4']); title=(' '.join(h.stripped_strings) if h else txt[:120])[:180]
+              sections.append([kind,name,path,i,el.name,el.get('id',''),' '.join(el.get('class') or [])[:220],title,len(txt)])
+            title=soup.title.get_text(' ',strip=True) if soup.title else name
+            fp.write_text('<!doctype html>\n'+str(soup),encoding='utf-8')
+            pages.append([kind,name,path,title,sc,len(html)])
+            print('CAPTURE',kind,name,path,'sections',sc,'chars',len(html))
+
+          # 1. Primary tabs
+          open_home(); capture('page','Trang chủ','index.html')
+          tabs=[('Sản phẩm','san-pham/index.html'),('About','about/index.html'),('Journal','journal/index.html'),('Tài nguyên miễn phí','tai-nguyen-mien-phi/index.html')]
+          for label,path in tabs:
+            open_home(); r=click_text(label); print('TAB',label,r); capture('page',label,path)
+
+          # 2. All shop product details
+          open_home(); click_text('Sản phẩm')
+          time.sleep(.5)
+          prod_buttons=d.execute_script("return [...document.querySelectorAll('button')].filter(b=>b.offsetParent!==null && (b.innerText||'').includes('Chi tiết')).map(b=>(b.innerText||'').trim())")
+          print('PRODUCT_DETAIL_BUTTONS',len(prod_buttons),prod_buttons)
+          product_names=[]
+          for i in range(len(prod_buttons)):
+            open_home(); click_text('Sản phẩm'); time.sleep(.4)
+            r=click_text('Chi tiết',True,i)
+            if not r.get('ok'): continue
+            time.sleep(.8)
+            # derive h1/name from detail view
+            name=d.execute_script("const h=document.querySelector('main h1'); return h?h.innerText.trim():''") or f'Sản phẩm {i+1}'
+            base=slug(name); product_names.append(name)
+            capture('product',name,f'san-pham/{base}/index.html')
+
+          # supplement featured product buttons if shop list didn't expose all
+          if len(product_names)<6:
+            open_home()
+            btns=d.execute_script("return [...document.querySelectorAll('button')].filter(b=>b.offsetParent!==null).map(b=>(b.innerText||'').replace(/\\s+/g,' ').trim()).filter(t=>/^0[1-9] /.test(t))")
+            for i,bt in enumerate(btns):
+              open_home(); r=click_text(bt)
+              if r.get('ok'):
+                name=d.execute_script("const h=document.querySelector('main h1'); return h?h.innerText.trim():''") or bt
+                if name not in product_names:
+                  product_names.append(name); capture('product',name,f'san-pham/{slug(name)}/index.html')
+
+          # 3. All Journal article detail states
+          open_home(); click_text('Journal'); time.sleep(.5)
+          article_buttons=d.execute_script("return [...document.querySelectorAll('button')].filter(b=>b.offsetParent!==null && (b.innerText||'').includes('ĐỌC BÀI VIẾT')).map(b=>(b.innerText||'').trim())")
+          print('ARTICLE_BUTTONS',len(article_buttons))
+          for i in range(len(article_buttons)):
+            open_home(); click_text('Journal'); time.sleep(.4)
+            r=click_text('ĐỌC BÀI VIẾT',True,i)
+            if not r.get('ok'): continue
+            time.sleep(.8)
+            name=d.execute_script("const h=document.querySelector('main h1'); return h?h.innerText.trim():''") or f'Bài viết {i+1}'
+            capture('article',name,f'journal/{slug(name)}/index.html')
+
+          # 4. Policy/modal views: license, search, login, cart; capture as standalone static views
+          open_home();
+          r=click_text('Giấy phép sử dụng',True); print('LICENSE',r)
+          if r.get('ok'): capture('modal','Giấy phép sử dụng','license/index.html')
+
+          open_home();
+          # icon button title/aria-label may hold search
+          rr=d.execute_script("const b=[...document.querySelectorAll('button')].find(x=>/tìm|search/i.test((x.getAttribute('aria-label')||'')+' '+(x.getAttribute('title')||''))); if(b){b.click();return true} return false")
+          time.sleep(.5)
+          if rr: capture('modal','Tìm kiếm','tim-kiem/index.html')
+
+          open_home(); r=click_text('Đăng ký / Đăng nhập',True)
+          if r.get('ok'): capture('modal','Đăng ký / Đăng nhập','dang-nhap/index.html')
+
+          open_home();
+          rr=d.execute_script("const b=[...document.querySelectorAll('button')].find(x=>/giỏ|cart/i.test((x.getAttribute('aria-label')||'')+' '+(x.getAttribute('title')||'')+' '+(x.innerText||''))); if(b){b.click();return true} return false")
+          time.sleep(.5)
+          if rr: capture('modal','Giỏ hàng','gio-hang/index.html')
+
+          d.quit()
+
+          # assets: gather all URLs from snapshots and localize
+          cssurl=re.compile(r"url\\((['\\\"]?)([^)'\\\"#]+)\\1\\)",re.I)
+          def asset_path(u):
+            p=urlparse(u); parts=[x for x in p.path.strip('/').split('/') if x] or ['asset']
+            if p.query:
+              h=hashlib.sha1(p.query.encode()).hexdigest()[:8]; stem=parts[-1]
+              if '.' in stem: a,b=stem.rsplit('.',1); parts[-1]=f'{a}-{h}.{b}'
+              else: parts[-1]=stem+'-'+h
+            return OUT.joinpath('_assets',*parts)
+          def rel(frm,to): return os.path.relpath(to,frm.parent).replace(os.sep,'/')
+          def dl(u,ref):
+            absu=urljoin(ref,u)
+            if absu in assets: return assets[absu]
+            try:
+              r=S.get(absu,timeout=30)
+              if r.status_code>=400: asset_rows.append([absu,'',r.status_code,r.headers.get('content-type','')]); assets[absu]=None; return None
+              lp=asset_path(absu); lp.parent.mkdir(parents=True,exist_ok=True); lp.write_bytes(r.content); assets[absu]=lp
+              asset_rows.append([absu,str(lp.relative_to(OUT)),r.status_code,r.headers.get('content-type','')])
+              if lp.suffix.lower()=='.css':
+                txt=r.text
+                def repl(m):
+                  t=m.group(2).strip()
+                  if t.startswith(('data:','blob:')): return m.group(0)
+                  ch=dl(t,absu); return "url('"+rel(lp,ch)+"')" if ch else m.group(0)
+                lp.write_text(cssurl.sub(repl,txt),encoding='utf-8')
+              return lp
+            except Exception as e:
+              asset_rows.append([absu,'','ERR:'+repr(e),'']); assets[absu]=None; return None
+
+          # Known static nav mapping for button labels
+          navmap={'Trang chủ':'index.html','Sản phẩm':'san-pham/index.html','About':'about/index.html','Journal':'journal/index.html','Tài nguyên miễn phí':'tai-nguyen-mien-phi/index.html','Cửa hàng số':'san-pham/index.html','Giới thiệu':'about/index.html','Journal kỹ thuật':'journal/index.html','Giấy phép sử dụng (License)':'license/index.html'}
+
+          for row in pages:
+            fp=OUT/row[2]; soup=BeautifulSoup(fp.read_text(encoding='utf-8',errors='replace'),'html.parser')
+            # assets
+            for tag,attrs in {'img':['src'],'link':['href'],'source':['src'],'video':['src','poster'],'audio':['src']}.items():
+              for el in soup.find_all(tag):
+                for at in attrs:
+                  v=el.get(at)
+                  if not v or v.startswith(('data:','blob:','#')): continue
+                  if tag=='link':
+                    rels={x.lower() for x in (el.get('rel') or [])}
+                    if not rels.intersection({'stylesheet','icon','shortcut','preload','apple-touch-icon','manifest','mask-icon'}): continue
+                  if v.startswith('/') or urlparse(v).scheme in ('http','https'):
+                    ap=dl(v,ORIGIN)
+                    if ap: el[at]=rel(fp,ap)
+            for el in soup.find_all(srcset=True):
+              outs=[]
+              for item in el['srcset'].split(','):
+                bits=item.strip().split();
+                if not bits: continue
+                ap=dl(bits[0],ORIGIN)
+                if ap: bits[0]=rel(fp,ap)
+                outs.append(' '.join(bits))
+              el['srcset']=', '.join(outs)
+            for el in soup.find_all(style=True):
+              def rr(m):
+                ap=dl(m.group(2).strip(),ORIGIN); return "url('"+rel(fp,ap)+"')" if ap else m.group(0)
+              el['style']=cssurl.sub(rr,el['style'])
+            for st in soup.find_all('style'):
+              if st.string:
+                def sr(m):
+                  ap=dl(m.group(2).strip(),ORIGIN); return "url('"+rel(fp,ap)+"')" if ap else m.group(0)
+                st.string.replace_with(cssurl.sub(sr,st.string))
+            # convert known nav buttons to anchors while preserving classes/children
+            for b in list(soup.find_all('button')):
+              txt=' '.join(b.stripped_strings).strip()
+              target=None
+              for k,v in navmap.items():
+                if txt==k or (k in txt and len(txt)<80): target=v; break
+              if target:
+                a=soup.new_tag('a',href=rel(fp,OUT/target));
+                for k,v in b.attrs.items():
+                  if not k.startswith('on'): a.attrs[k]=v
+                for ch in list(b.contents): a.append(ch.extract())
+                b.replace_with(a)
+            fp.write_text('<!doctype html>\n'+str(soup),encoding='utf-8')
+
+          # QA
+          broken=[]
+          for row in pages:
+            fp=OUT/row[2]; soup=BeautifulSoup(fp.read_text(encoding='utf-8',errors='replace'),'html.parser')
+            for tag,at in [('a','href'),('img','src'),('link','href'),('source','src'),('video','src'),('audio','src')]:
+              for n in soup.find_all(tag):
+                v=n.get(at)
+                if not v or v.startswith(('http://','https://','//','mailto:','tel:','javascript:','data:','blob:','#')): continue
+                t=v.split('#',1)[0].split('?',1)[0]
+                if not t: continue
+                p=(fp.parent/t).resolve()
+                try:p.relative_to(OUT.resolve())
+                except:continue
+                if not p.exists(): broken.append([row[2],tag,at,v])
+
+          def writecsv(name,head,rows):
+            with (OUT/name).open('w',newline='',encoding='utf-8-sig') as f: w=csv.writer(f); w.writerow(head); w.writerows(rows)
+          writecsv('PAGE-INVENTORY.csv',['kind','name','local','title','sections','dom_chars'],pages)
+          writecsv('SECTION-MATRIX.csv',['kind','name','local','index','tag','id','class','title','text_chars'],sections)
+          writecsv('ASSET-MAP.csv',['source_url','local','status','content_type'],asset_rows)
+          writecsv('QA-REPORT.csv',['page','tag','attr','broken_target'],broken)
+          report={'pages_total':len(pages),'main_pages':sum(1 for p in pages if p[0]=='page'),'product_pages':sum(1 for p in pages if p[0]=='product'),'article_pages':sum(1 for p in pages if p[0]=='article'),'modal_pages':sum(1 for p in pages if p[0]=='modal'),'sections_total':len(sections),'assets_total':sum(1 for v in assets.values() if v),'broken_local_refs':len(broken)}
+          (OUT/'CLONE-REPORT.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
+          (OUT/'README.txt').write_text('TRẦN THỊ BÌNH — STATIC SPA EXPORT\nMở index.html trực tiếp.\nXem PAGE-INVENTORY.csv / SECTION-MATRIX.csv / QA-REPORT.csv để audit.\n',encoding='utf-8')
+          print('FINAL_SUMMARY',json.dumps(report,ensure_ascii=False))
+          print('PAGES')
+          for p in pages: print(p[0],p[2],p[1])
+          shutil.make_archive('tranthibinh-full-static','zip',root_dir=OUT)
+          PY
+          python /tmp/export.py
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tranthibinh-full-static
+          path: tranthibinh-full-static.zip
+          retention-days: 1
