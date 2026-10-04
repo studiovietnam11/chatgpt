@@ -1,0 +1,108 @@
+name: CloneWebTinh Webflow 12 Sites 2026-10-04
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+
+jobs:
+  clone:
+    if: github.event.issue.title == 'RUN_CLONEWEBTINH_WEBFLOW_20261004'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        batch: [1, 2]
+    steps:
+      - name: Prepare
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y wget zip
+          mkdir -p raw
+
+      - name: Mirror published Webflow source
+        shell: bash
+        run: |
+          set -u
+          if [ "${{ matrix.batch }}" = "1" ]; then
+            cat > /tmp/sites.txt <<'EOF'
+Catalysty|catalysty|https://catalysty-temp.webflow.io/
+Merkil|merkil|https://merkil.webflow.io/
+Copora|copora|https://copora-wbs.webflow.io/
+Fer.Do|fer-do|https://fardo-portfolio.webflow.io/
+Firs|firs|https://firsstudio-template.webflow.io/
+Fropie|fropie|https://fropie.webflow.io/
+EOF
+          else
+            cat > /tmp/sites.txt <<'EOF'
+Fylla|fylla|https://fylla-template.webflow.io/
+Finox|finox|https://finox.webflow.io/
+Strobe Home A|strobe-home-a|https://strobe.webflow.io/homepage/home-a
+Sidenote|sidenote|https://sidenote-template.webflow.io/
+Boldway|boldway|https://boldway.webflow.io/
+PrimeFolio|primefolio|https://primefolio.webflow.io/
+EOF
+          fi
+
+          while IFS='|' read -r name slug seed; do
+            [ -n "$slug" ] || continue
+            host="$(python -c 'import sys,urllib.parse;print(urllib.parse.urlparse(sys.argv[1]).netloc)' "$seed")"
+            origin="https://$host/"
+            out="raw/$slug"
+            mkdir -p "$out"
+            printf '%s\n' "$seed" "$origin" > "$out/seeds.txt"
+
+            python - "$origin" "$out/seeds.txt" <<'PY'
+import sys, urllib.request, xml.etree.ElementTree as ET
+origin, dest = sys.argv[1], sys.argv[2]
+seen=set(open(dest,encoding='utf-8').read().splitlines())
+todo=[origin+'sitemap.xml', origin+'sitemap_index.xml']
+for sm in todo:
+    try:
+        req=urllib.request.Request(sm,headers={'User-Agent':'Mozilla/5.0'})
+        data=urllib.request.urlopen(req,timeout=25).read()
+        root=ET.fromstring(data)
+        locs=[(x.text or '').strip() for x in root.iter() if x.tag.lower().endswith('loc')]
+        for u in locs:
+            if u.endswith('.xml') and u.startswith(origin):
+                try:
+                    rr=urllib.request.Request(u,headers={'User-Agent':'Mozilla/5.0'})
+                    rrdata=urllib.request.urlopen(rr,timeout=25).read()
+                    rroot=ET.fromstring(rrdata)
+                    for y in rroot.iter():
+                        if y.tag.lower().endswith('loc') and (y.text or '').strip().startswith(origin):
+                            seen.add((y.text or '').strip())
+                except Exception as e:
+                    print('child sitemap',u,e)
+            elif u.startswith(origin):
+                seen.add(u)
+        if locs: break
+    except Exception as e:
+        print('sitemap',sm,e)
+open(dest,'w',encoding='utf-8').write('\n'.join(sorted(seen))+'\n')
+PY
+
+            domains="$host,cdn.prod.website-files.com,assets.website-files.com,uploads-ssl.webflow.com,d3e54v103j8qbb.cloudfront.net,code.jquery.com,cdn.jsdelivr.net,cdnjs.cloudflare.com,unpkg.com,fonts.googleapis.com,fonts.gstatic.com,use.typekit.net,p.typekit.net"
+            wget               --recursive --level=inf               --page-requisites --convert-links --adjust-extension               --span-hosts --domains="$domains"               --execute robots=off               --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/154 Safari/537.36"               --timeout=30 --tries=3 --retry-connrefused --waitretry=1               --no-verbose               --directory-prefix="$out/mirror"               --input-file="$out/seeds.txt"               > "$out/wget.log" 2>&1 || true
+
+            cat > "$out/SOURCE.json" <<EOF
+{"name":"$name","slug":"$slug","seed":"$seed","origin":"$origin","host":"$host"}
+EOF
+            echo "DONE $name"
+            find "$out/mirror" -type f | wc -l
+          done < /tmp/sites.txt
+
+      - name: Pack raw mirror
+        run: |
+          zip -qr "clonewebtinh-raw-batch-${{ matrix.batch }}.zip" raw
+
+      - name: Upload raw mirror
+        uses: actions/upload-artifact@v4
+        with:
+          name: clonewebtinh-raw-batch-${{ matrix.batch }}
+          path: clonewebtinh-raw-batch-${{ matrix.batch }}.zip
+          retention-days: 1
+          if-no-files-found: error
