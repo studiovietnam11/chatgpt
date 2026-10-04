@@ -1,0 +1,103 @@
+name: CloneWebTinh Compact Final
+on:
+  issues:
+    types: [opened]
+permissions:
+  actions: read
+  contents: read
+jobs:
+  compact:
+    if: github.event.issue.title == 'RUN_CLONEWEBTINH_COMPACT_FINAL_20261004'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Download full repaired package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/${{ github.repository }}/actions/artifacts/11295530394/zip > full.zip
+          unzip -q full.zip -d pkg
+      - name: Compact repaired video media to canonical CDN URLs
+        run: |
+          python - <<'PY'
+          import csv, os
+          from pathlib import Path
+          from bs4 import BeautifulSoup
+
+          root=Path("pkg")
+          amap=root/"ASSET-REPAIR.csv"
+          rows=[]
+          if amap.exists():
+              with amap.open(encoding="utf-8-sig",newline="") as f:
+                  rows=list(csv.DictReader(f))
+          # exact repaired local target -> source CDN URL
+          targets={}
+          for r in rows:
+              site=root/r["site"]
+              html=site/r["html"]
+              v=r["local_ref"]
+              clean=v.split("#",1)[0].split("?",1)[0]
+              q=(html.parent/clean).resolve()
+              if q.suffix.lower() in {".mp4",".webm",".mov"} and q.exists():
+                  targets[str(q)]=r["source_url"]
+
+          rewrites=0
+          for site in [p for p in root.iterdir() if p.is_dir()]:
+              for html in site.rglob("*.html"):
+                  soup=BeautifulSoup(html.read_text(encoding="utf-8",errors="ignore"),"html.parser")
+                  changed=False
+                  for tag,attrs in {"source":["src"],"video":["src","poster"],"audio":["src"],"img":["src"]}.items():
+                      for n in soup.find_all(tag):
+                          for at in attrs:
+                              v=n.get(at)
+                              if not v or v.startswith(("http://","https://","//","data:","blob:","#")): continue
+                              clean=v.split("#",1)[0].split("?",1)[0]
+                              q=(html.parent/clean).resolve()
+                              u=targets.get(str(q))
+                              if u:
+                                  n[at]=u
+                                  changed=True
+                                  rewrites+=1
+                  if changed:
+                      html.write_text(str(soup),encoding="utf-8")
+          freed=0; removed=0
+          for qs in targets:
+              q=Path(qs)
+              if q.exists():
+                  freed+=q.stat().st_size; q.unlink(); removed+=1
+          print("VIDEO_REWRITES",rewrites)
+          print("VIDEO_FILES_REMOVED",removed)
+          print("BYTES_FREED",freed)
+
+          broken=[]
+          remote_media=0
+          for site in [p for p in root.iterdir() if p.is_dir()]:
+              for html in site.rglob("*.html"):
+                  soup=BeautifulSoup(html.read_text(encoding="utf-8",errors="ignore"),"html.parser")
+                  for tag,attrs in {"a":["href"],"img":["src"],"source":["src"],"video":["src","poster"],"audio":["src"],"script":["src"],"link":["href"]}.items():
+                      for n in soup.find_all(tag):
+                          for at in attrs:
+                              v=n.get(at)
+                              if not v: continue
+                              if v.startswith(("http://","https://","//")):
+                                  if tag in {"source","video","audio"}: remote_media+=1
+                                  continue
+                              if v.startswith(("data:","blob:","#","mailto:","tel:","javascript:")): continue
+                              clean=v.split("#",1)[0].split("?",1)[0]
+                              if not clean:continue
+                              q=(html.parent/clean).resolve()
+                              try:q.relative_to(site.resolve())
+                              except:continue
+                              if not q.exists(): broken.append((site.name,str(html.relative_to(site)),tag,at,v))
+          print("FINAL_BROKEN_LOCAL_REFS",len(broken))
+          print("REMOTE_MEDIA_REFS",remote_media)
+          (root/"FINAL-STATUS.txt").write_text("FINAL_BROKEN_LOCAL_REFS="+str(len(broken))+"\nREMOTE_MEDIA_REFS="+str(remote_media)+"\nVIDEO_FILES_REMOTE="+str(removed)+"\nBYTES_FREED="+str(freed)+"\n",encoding="utf-8")
+          PY
+      - name: Upload compact final
+        uses: actions/upload-artifact@v4
+        with:
+          name: CLONEWEBTINH-WEBFLOW-12-FINAL-COMPACT
+          path: pkg
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
