@@ -6,7 +6,7 @@ on:
 
 jobs:
   clone:
-    if: github.event.issue.title == 'RUN_CLONEWEBTINH_WEBFLOW_20261004_V2'
+    if: github.event.issue.title == 'RUN_CLONEWEBTINH_WEBFLOW_20261004_V3'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
@@ -19,10 +19,35 @@ jobs:
         run: sudo apt-get update -y && sudo apt-get install -y wget
       - name: Mirror sites
         run: python scripts/clonewebtinh_webflow.py ${{ matrix.batch }}
-      - name: Upload artifact
+      - name: Upload raw batch
         uses: actions/upload-artifact@v4
         with:
           name: clonewebtinh-raw-batch-${{ matrix.batch }}
           path: clonewebtinh-raw-batch-${{ matrix.batch }}.zip
+          retention-days: 1
+          if-no-files-found: error
+
+  package:
+    if: github.event.issue.title == 'RUN_CLONEWEBTINH_WEBFLOW_20261004_V3'
+    needs: clone
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install QA parser
+        run: pip install beautifulsoup4
+      - name: Download raw batches
+        uses: actions/download-artifact@v4
+        with:
+          pattern: clonewebtinh-raw-batch-*
+          path: incoming
+          merge-multiple: true
+      - name: Package and QA
+        run: python scripts/package_clonewebtinh.py incoming CLONEWEBTINH-WEBFLOW-12
+      - name: Upload final package
+        uses: actions/upload-artifact@v4
+        with:
+          name: CLONEWEBTINH-WEBFLOW-12-FINAL
+          path: CLONEWEBTINH-WEBFLOW-12
           retention-days: 1
           if-no-files-found: error
