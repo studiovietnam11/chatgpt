@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   fix:
-    if: github.event.issue.title == 'RUN_CLONEWEBTINH_LASTFIX_20261004'
+    if: github.event.issue.title == 'RUN_CLONEWEBTINH_LASTFIX_20261004_V2'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -17,6 +17,8 @@ jobs:
         run: |
           gh api repos/${{ github.repository }}/actions/artifacts/11295540199/zip > repaired.zip
           unzip -q repaired.zip -d pkg
+      - name: Install parser
+        run: pip install beautifulsoup4
       - name: Resolve last Catalysty asset
         run: |
           python - <<'PY'
