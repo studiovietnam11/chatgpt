@@ -26,7 +26,7 @@ def localize_braxton_fonts(site_root):
     fonts.mkdir(parents=True,exist_ok=True)
     api="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Bebas+Neue&family=Poppins:wght@400;500;600;700&display=swap"
     css=fetch(api).decode("utf-8","replace")
-    urls=re.findall(r"url\\((https://[^)]+)\\)",css)
+    urls=re.findall(r"url\((https://[^)]+)\)",css)
     mapping={}
     for i,u in enumerate(dict.fromkeys(urls),1):
         ext=".woff2"
