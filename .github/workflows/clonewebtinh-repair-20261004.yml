@@ -1,0 +1,117 @@
+name: CloneWebTinh Repair Encoded Assets
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  repair:
+    if: github.event.issue.title == 'RUN_CLONEWEBTINH_REPAIR_20261004'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Download direct package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/${{ github.repository }}/actions/artifacts/11295039260/zip > direct.zip
+          unzip -q direct.zip -d pkg
+      - name: Install parser
+        run: pip install requests beautifulsoup4
+      - name: Repair encoded CDN refs and re-QA
+        run: |
+          cat > /tmp/repair.py <<'PY'
+          import os,csv,json
+          from pathlib import Path
+          from urllib.parse import urlsplit, urlunsplit, unquote, quote
+          import requests
+          from bs4 import BeautifulSoup
+
+          ROOT=Path("pkg/CLONEWEBTINH-WEBFLOW-12")
+          S=requests.Session()
+          S.headers.update({"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/154 Safari/537.36"})
+          hosts=("cdn.prod.website-files.com/","assets-global.website-files.com/","assets.website-files.com/","uploads-ssl.webflow.com/","d3e54v103j8qbb.cloudfront.net/")
+          downloaded={}
+          attempts=[]
+          def source_url(v):
+              vv=v.replace("\\","/")
+              for h in hosts:
+                  pos=vv.find(h)
+                  if pos>=0:
+                      raw="https://"+vv[pos:]
+                      sp=urlsplit(raw)
+                      p=unquote(sp.path)
+                      return urlunsplit((sp.scheme,sp.netloc,quote(p,safe="/%:@!$&'()*+,;="),sp.query,""))
+              return None
+
+          for site in sorted([p for p in ROOT.iterdir() if p.is_dir()]):
+              for html in site.rglob("*.html"):
+                  try: soup=BeautifulSoup(html.read_text(encoding="utf-8",errors="ignore"),"html.parser")
+                  except: continue
+                  changed=False
+                  for tag,attrs in {"img":["src"],"source":["src"],"video":["src","poster"],"audio":["src"],"script":["src"],"link":["href"]}.items():
+                      for n in soup.find_all(tag):
+                          for at in attrs:
+                              v=n.get(at)
+                              if not v or v.startswith(("http://","https://","//","data:","blob:","#","mailto:","tel:","javascript:")): continue
+                              clean=v.split("#",1)[0].split("?",1)[0]
+                              if not clean: continue
+                              q=(html.parent/clean).resolve()
+                              try:q.relative_to(site.resolve())
+                              except:continue
+                              if q.exists(): continue
+                              u=source_url(v)
+                              if not u: continue
+                              key=(str(q),u)
+                              if key in downloaded: continue
+                              try:
+                                  r=S.get(u,timeout=45,allow_redirects=True)
+                                  attempts.append([site.name,str(html.relative_to(site)),v,u,r.status_code,len(r.content)])
+                                  if r.status_code<400 and r.content:
+                                      q.parent.mkdir(parents=True,exist_ok=True)
+                                      q.write_bytes(r.content)
+                                      downloaded[key]=True
+                              except Exception as e:
+                                  attempts.append([site.name,str(html.relative_to(site)),v,u,"ERR",repr(e)])
+              print("repaired",site.name)
+
+          with (ROOT/"ASSET-REPAIR.csv").open("w",newline="",encoding="utf-8-sig") as f:
+              w=csv.writer(f); w.writerow(["site","html","local_ref","source_url","status","bytes"]);w.writerows(attempts)
+
+          rows=[]
+          for site in sorted([p for p in ROOT.iterdir() if p.is_dir()]):
+              broken=[]
+              for html in site.rglob("*.html"):
+                  try:soup=BeautifulSoup(html.read_text(encoding="utf-8",errors="ignore"),"html.parser")
+                  except:continue
+                  for tag,attrs in {"a":["href"],"img":["src"],"source":["src"],"video":["src","poster"],"audio":["src"],"script":["src"],"link":["href"]}.items():
+                      for n in soup.find_all(tag):
+                          for at in attrs:
+                              v=n.get(at)
+                              if not v or v.startswith(("http://","https://","//","data:","blob:","#","mailto:","tel:","javascript:")): continue
+                              clean=v.split("#",1)[0].split("?",1)[0]
+                              if not clean:continue
+                              q=(html.parent/clean).resolve()
+                              try:q.relative_to(site.resolve())
+                              except:continue
+                              if not q.exists():broken.append([str(html.relative_to(site)),tag,at,v])
+              rows.append([site.name,len(broken)])
+              with (site/"FINAL-BROKEN-REFS.csv").open("w",newline="",encoding="utf-8-sig") as f:
+                  w=csv.writer(f);w.writerow(["html","tag","attr","ref"]);w.writerows(broken)
+              print("FINAL",site.name,"broken",len(broken))
+          with (ROOT/"FINAL-QA.csv").open("w",newline="",encoding="utf-8-sig") as f:
+              w=csv.writer(f);w.writerow(["site","broken_local_refs_after_repair"]);w.writerows(rows)
+          print("SUMMARY",json.dumps(rows))
+          PY
+          python /tmp/repair.py
+      - name: Upload repaired direct package
+        uses: actions/upload-artifact@v4
+        with:
+          name: CLONEWEBTINH-WEBFLOW-12-REPAIRED
+          path: pkg/CLONEWEBTINH-WEBFLOW-12
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
