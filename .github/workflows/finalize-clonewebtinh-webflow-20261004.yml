@@ -1,0 +1,45 @@
+name: Finalize CloneWebTinh Webflow 12
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  finalize:
+    if: github.event.issue.title == 'RUN_FINALIZE_CLONEWEBTINH_WEBFLOW_20261004'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download raw batch artifacts
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 37179699088
+          github-token: ${{ github.token }}
+          path: incoming
+      - name: Unpack raw batches
+        run: |
+          mkdir -p workspace
+          find incoming -type f -name '*.zip' -print
+          for z in $(find incoming -type f -name '*.zip'); do
+            unzip -q "$z" -d workspace
+          done
+          find workspace/raw -maxdepth 2 -type f -name SOURCE.json -print
+      - name: Install parser
+        run: pip install beautifulsoup4
+      - name: Finalize and QA
+        run: |
+          python scripts/finalize_clonewebtinh_webflow.py workspace/raw clonewebtinh-webflow-12
+          cat clonewebtinh-webflow-12/MASTER-QA.csv
+          zip -qr clonewebtinh-webflow-12-final.zip clonewebtinh-webflow-12
+      - name: Upload final
+        uses: actions/upload-artifact@v4
+        with:
+          name: clonewebtinh-webflow-12-final
+          path: clonewebtinh-webflow-12-final.zip
+          retention-days: 3
+          if-no-files-found: error
