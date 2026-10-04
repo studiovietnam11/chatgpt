@@ -1,0 +1,71 @@
+name: CloneWebTinh Catalysty Last Asset Fix
+on:
+  issues:
+    types: [opened]
+permissions:
+  actions: read
+  contents: read
+jobs:
+  fix:
+    if: github.event.issue.title == 'RUN_CLONEWEBTINH_LASTFIX_20261004'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Download repaired package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/${{ github.repository }}/actions/artifacts/11295540199/zip > repaired.zip
+          unzip -q repaired.zip -d pkg
+      - name: Resolve last Catalysty asset
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from bs4 import BeautifulSoup
+          root=Path("pkg")
+          site=root/"01-catalysty"
+          needle="6650f6c63f1e4937b32e30ff_blog-img"
+          candidates=[p for p in site.rglob("*") if p.is_file() and needle in p.name]
+          print("CANDIDATES")
+          for p in candidates: print(p)
+          fixed=0
+          for html in site.rglob("*.html"):
+              soup=BeautifulSoup(html.read_text(encoding="utf-8",errors="ignore"),"html.parser")
+              for img in soup.find_all("img",src=True):
+                  v=img["src"]
+                  if needle not in v: continue
+                  q=(html.parent/v.split("#",1)[0].split("?",1)[0]).resolve()
+                  if q.exists(): continue
+                  if candidates:
+                      q.parent.mkdir(parents=True,exist_ok=True)
+                      q.write_bytes(candidates[0].read_bytes())
+                      fixed+=1
+                      print("COPIED",candidates[0],"->",q)
+          print("FIXED_REFS",fixed)
+          broken=[]
+          for site in sorted([p for p in root.iterdir() if p.is_dir()]):
+              for html in site.rglob("*.html"):
+                  soup=BeautifulSoup(html.read_text(encoding="utf-8",errors="ignore"),"html.parser")
+                  for tag,attrs in {"a":["href"],"img":["src"],"source":["src"],"video":["src","poster"],"audio":["src"],"script":["src"],"link":["href"]}.items():
+                      for n in soup.find_all(tag):
+                          for at in attrs:
+                              v=n.get(at)
+                              if not v or v.startswith(("http://","https://","//","data:","blob:","#","mailto:","tel:","javascript:")): continue
+                              clean=v.split("#",1)[0].split("?",1)[0]
+                              if not clean: continue
+                              q=(html.parent/clean).resolve()
+                              try:q.relative_to(site.resolve())
+                              except:continue
+                              if not q.exists(): broken.append((site.name,str(html.relative_to(site)),tag,at,v))
+          print("FINAL_BROKEN_COUNT",len(broken))
+          for x in broken[:30]: print("BROKEN",x)
+          (root/"FINAL-STATUS.txt").write_text("FINAL_BROKEN_LOCAL_REFS="+str(len(broken))+"\n",encoding="utf-8")
+          PY
+      - name: Upload final direct package
+        uses: actions/upload-artifact@v4
+        with:
+          name: CLONEWEBTINH-WEBFLOW-12-FINAL
+          path: pkg
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
