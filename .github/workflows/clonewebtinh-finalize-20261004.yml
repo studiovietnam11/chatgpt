@@ -1,0 +1,44 @@
+name: CloneWebTinh Finalize Direct ZIP
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  finalize:
+    if: github.event.issue.title == 'RUN_CLONEWEBTINH_FINALIZE_20261004'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Download previous final artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/${{ github.repository }}/actions/artifacts/11294463134/zip > artifact.zip
+          unzip -q artifact.zip -d outer
+          unzip -q outer/CLONEWEBTINH-WEBFLOW-12-FINAL.zip -d direct
+      - name: Normalize report newlines
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          root=Path("direct/CLONEWEBTINH-WEBFLOW-12")
+          for p in root.rglob("*.md"):
+              s=p.read_text(encoding="utf-8",errors="ignore")
+              if "\\n" in s:
+                  p.write_text(s.replace("\\n","\n"),encoding="utf-8")
+          print("REPORTS")
+          for p in sorted(root.glob("*/QA-REPORT.md")):
+              print("\n==",p.parent.name,"==")
+              print(p.read_text(encoding="utf-8",errors="ignore")[:2500])
+          PY
+      - name: Upload direct package
+        uses: actions/upload-artifact@v4
+        with:
+          name: CLONEWEBTINH-WEBFLOW-12
+          path: direct/CLONEWEBTINH-WEBFLOW-12
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
