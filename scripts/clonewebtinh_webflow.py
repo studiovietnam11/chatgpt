@@ -51,7 +51,7 @@ for name,slug,seed in sites:
     out.mkdir(parents=True,exist_ok=True)
     urls=sorted(set(sitemap_urls(origin)+[seed]))
     (out/"seeds.txt").write_text("\n".join(urls)+"\n",encoding="utf-8")
-    domains=",".join([host,"cdn.prod.website-files.com","assets.website-files.com","uploads-ssl.webflow.com","d3e54v103j8qbb.cloudfront.net","code.jquery.com","cdn.jsdelivr.net","cdnjs.cloudflare.com","unpkg.com","fonts.googleapis.com","fonts.gstatic.com","use.typekit.net","p.typekit.net"])
+    domains=",".join([host,"cdn.prod.website-files.com","assets.website-files.com","assets-global.website-files.com","uploads-ssl.webflow.com","d3e54v103j8qbb.cloudfront.net","code.jquery.com","cdn.jsdelivr.net","cdnjs.cloudflare.com","unpkg.com","fonts.googleapis.com","fonts.gstatic.com","use.typekit.net","p.typekit.net"])
     mirror=out/"mirror"
     cmd=["wget","--recursive","--level=inf","--page-requisites","--convert-links","--adjust-extension","--span-hosts",f"--domains={domains}","--execute","robots=off",f"--user-agent={UA}","--timeout=30","--tries=3","--retry-connrefused","--waitretry=1","--no-verbose",f"--directory-prefix={mirror}",f"--input-file={out/'seeds.txt'}"]
     with open(out/"wget.log","w",encoding="utf-8") as log:
