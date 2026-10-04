@@ -1,0 +1,29 @@
+name: CloneWebTinh Braxton Jonas FINAL 2026-10-04
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  final:
+    if: github.event.issue.title == 'RUN_CLONEWEBTINH_BRAXTON_JONAS_FINAL_20261004'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install wget
+        run: sudo apt-get update -y && sudo apt-get install -y wget
+      - name: Mirror sources
+        run: python scripts/clonewebtinh_braxton_jonas.py
+      - name: Localize fonts, fix converted refs, and QA
+        run: python scripts/finalize_braxton_jonas.py
+      - name: Upload final packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: clonewebtinh-braxton-jonas-FINAL
+          path: |
+            clonewebtinh-braxton-FINAL.zip
+            clonewebtinh-jonas-FINAL.zip
+            clonewebtinh-braxton-jonas-FINAL.zip
+          retention-days: 1
+          if-no-files-found: error
