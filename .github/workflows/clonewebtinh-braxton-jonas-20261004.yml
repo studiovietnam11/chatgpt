@@ -1,0 +1,27 @@
+name: CloneWebTinh Braxton Jonas 2026-10-04
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  mirror:
+    if: github.event.issue.title == 'RUN_CLONEWEBTINH_BRAXTON_JONAS_20261004'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install wget
+        run: sudo apt-get update -y && sudo apt-get install -y wget
+      - name: Mirror Braxton and Jonas
+        run: python scripts/clonewebtinh_braxton_jonas.py
+      - name: Upload source mirror
+        uses: actions/upload-artifact@v4
+        with:
+          name: clonewebtinh-braxton-jonas-source-mirror
+          path: |
+            clonewebtinh-braxton-source-mirror.zip
+            clonewebtinh-jonas-source-mirror.zip
+            clonewebtinh-braxton-jonas-source-mirror.zip
+          retention-days: 1
+          if-no-files-found: error
