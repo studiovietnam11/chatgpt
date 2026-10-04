@@ -1,0 +1,54 @@
+name: CloneWebTinh Split Deliverables
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  split:
+    if: github.event.issue.title == 'RUN_CLONEWEBTINH_SPLIT_DELIVERABLES'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        site:
+          - catalysty
+          - merkil
+          - copora
+          - fer-do
+          - firs
+          - fropie
+          - fylla
+          - finox
+          - strobe-home-a
+          - sidenote
+          - boldway
+          - primefolio
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 37179699088
+          github-token: ${{ github.token }}
+          path: incoming
+      - name: Prepare one site
+        run: |
+          mkdir -p workspace
+          for z in $(find incoming -type f -name '*.zip'); do unzip -q "$z" -d workspace; done
+          pip install beautifulsoup4
+          python scripts/finalize_clonewebtinh_webflow.py workspace/raw final-all
+          mkdir -p deliver
+          cp -a "final-all/${{ matrix.site }}" "deliver/${{ matrix.site }}"
+          cd deliver
+          zip -qr "../${{ matrix.site }}.zip" "${{ matrix.site }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.site }}
+          path: ${{ matrix.site }}.zip
+          retention-days: 3
+          if-no-files-found: error
