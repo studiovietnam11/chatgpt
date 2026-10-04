@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   repair:
-    if: github.event.issue.title == 'RUN_CLONEWEBTINH_REPAIR_20261004'
+    if: github.event.issue.title == 'RUN_CLONEWEBTINH_REPAIR_20261004_V2'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -30,7 +30,7 @@ jobs:
           import requests
           from bs4 import BeautifulSoup
 
-          ROOT=Path("pkg/CLONEWEBTINH-WEBFLOW-12")
+          ROOT=Path("pkg")
           S=requests.Session()
           S.headers.update({"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/154 Safari/537.36"})
           hosts=("cdn.prod.website-files.com/","assets-global.website-files.com/","assets.website-files.com/","uploads-ssl.webflow.com/","d3e54v103j8qbb.cloudfront.net/")
@@ -111,7 +111,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: CLONEWEBTINH-WEBFLOW-12-REPAIRED
-          path: pkg/CLONEWEBTINH-WEBFLOW-12
+          path: pkg
           retention-days: 1
           compression-level: 0
           if-no-files-found: error
