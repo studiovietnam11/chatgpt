@@ -1,4 +1,4 @@
-name: Publish FoxProfile Studio EXE
+name: Publish FoxProfile Studio EXE (startup fix)
 on:
   workflow_dispatch:
   push:
@@ -18,20 +18,20 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p download
-          gh run download 38128672941 --repo "${GITHUB_REPOSITORY}" -n FoxProfileStudio-Setup-2.5.1-Win64 -D download
-          test -s download/FoxProfileStudio-Setup-2.5.1-Win64.exe
-          file download/FoxProfileStudio-Setup-2.5.1-Win64.exe
-          sha256sum download/FoxProfileStudio-Setup-2.5.1-Win64.exe
+          gh run download 38171951414 --repo "${GITHUB_REPOSITORY}" -n FoxProfileStudio-Setup-2.5.2-Win64 -D download
+          test -s download/FoxProfileStudio-Setup-2.5.2-Win64.exe
+          file download/FoxProfileStudio-Setup-2.5.2-Win64.exe
+          sha256sum download/FoxProfileStudio-Setup-2.5.2-Win64.exe
       - name: Publish installer as direct-download release asset
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG="foxprofile-studio-v2.5.1"
+          TAG="foxprofile-studio-v2.5.2"
           NOTES="FoxProfile Studio Windows x64 native Setup.exe. Offline install, includes Python, Flet and Camoufox. Built on Windows Server 2022 and passed frozen GUI/worker self-tests. Still requires user-side installation and browser profile test on Windows 10/11. UNSIGNED EXE. This is a prerelease."
           if gh release view "$TAG" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            gh release upload "$TAG" download/FoxProfileStudio-Setup-2.5.1-Win64.exe --clobber --repo "${GITHUB_REPOSITORY}"
+            gh release upload "$TAG" download/FoxProfileStudio-Setup-2.5.2-Win64.exe --clobber --repo "${GITHUB_REPOSITORY}"
           else
-            gh release create "$TAG" download/FoxProfileStudio-Setup-2.5.1-Win64.exe --title "FoxProfile Studio 2.5.1 Windows EXE" --notes "$NOTES" --prerelease --repo "${GITHUB_REPOSITORY}"
+            gh release create "$TAG" download/FoxProfileStudio-Setup-2.5.2-Win64.exe --title "FoxProfile Studio 2.5.2 Windows EXE" --notes "$NOTES" --prerelease --repo "${GITHUB_REPOSITORY}"
           fi
           gh release view "$TAG" --repo "${GITHUB_REPOSITORY}" --json assets,url
