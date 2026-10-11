@@ -1,0 +1,51 @@
+name: Build and Publish FASTBROWSERS 3.0 Windows EXE
+on:
+  push:
+    paths:
+      - '.github/workflows/fastbrowsers-3-windows.yml'
+      - 'scripts/fastbrowsers/**'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  installer:
+    runs-on: windows-2022
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - name: Acquire upstream and apply FASTBROWSERS changes
+        run: |
+          $ErrorActionPreference='Stop'
+          Invoke-WebRequest 'https://github.com/chienbm98/foxprofile/archive/refs/tags/v2.3.1.zip' -OutFile upstream.zip
+          Expand-Archive upstream.zip upstream -Force
+          Move-Item upstream/foxprofile-2.3.1 app
+          Expand-Archive scripts/fastbrowsers/FASTBROWSERS-3.0.0-Overlay.zip app -Force
+          if (-not (Test-Path app/windows/build-FASTBROWSERS.ps1)) { throw 'Overlay is incomplete' }
+      - name: Install Inno Setup
+        run: choco install innosetup --yes --no-progress
+      - name: Build, run smoke test, and compile installer
+        working-directory: app
+        run: ./windows/build-FASTBROWSERS.ps1
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: FASTBROWSERS-Setup-3.0.0-Win64
+          path: app/release/FASTBROWSERS-Setup-3.0.0-Win64.exe
+          if-no-files-found: error
+          retention-days: 14
+      - name: Publish direct-download prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $file='app/release/FASTBROWSERS-Setup-3.0.0-Win64.exe'
+          if (-not (Test-Path $file)) { throw 'Installer not found' }
+          $tag='fastbrowsers-v3.0.0'
+          $notes='FASTBROWSERS 3.0.0 Windows 64-bit prerelease, orange-white dashboard, Inter font. Preserves legacy profile data. Unsigned installer. Automated Windows startup test passed; verify browser profile launch on your Windows machine.'
+          gh release create $tag $file --title 'FASTBROWSERS 3.0.0 Windows Installer' --notes $notes --prerelease --repo $env:GITHUB_REPOSITORY
