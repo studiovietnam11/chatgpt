@@ -26,7 +26,7 @@ jobs:
           Invoke-WebRequest 'https://github.com/chienbm98/foxprofile/archive/refs/tags/v2.3.1.zip' -OutFile upstream.zip
           Expand-Archive upstream.zip upstream -Force
           Move-Item upstream/foxprofile-2.3.1 app
-          Expand-Archive scripts/fastbrowsers/FASTBROWSERS-3.1.0-Overlay.zip app -Force
+          Expand-Archive scripts/fastbrowsers/FASTBROWSERS-3.0.0-Overlay.zip app -Force
           Expand-Archive scripts/fastbrowsers/FASTBROWSERS-3.1.0-Patch.zip app -Force
           if (-not (Test-Path app/windows/build-FASTBROWSERS.ps1)) { throw 'Overlay is incomplete' }
       - name: Check random profile and engine adapter tests
