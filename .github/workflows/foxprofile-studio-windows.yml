@@ -54,7 +54,7 @@ jobs:
         working-directory: work
         run: |
           $ErrorActionPreference = 'Stop'
-          $common = @('--noconfirm','--clean','--onedir','--paths','.','--collect-all','camoufox','--collect-all','flet','--collect-all','flet_desktop','--collect-all','playwright','--collect-all','browserforge','--collect-submodules','mcp.server','--collect-submodules','chrome_engine','--add-data','src;src','--add-data','chrome_engine;chrome_engine')
+          $common = @('--noconfirm','--clean','--onedir','--paths','.','--collect-all','camoufox','--collect-all','flet','--collect-all','flet_desktop','--collect-all','playwright','--collect-all','browserforge','--collect-data','language_tags','--collect-submodules','mcp.server','--collect-submodules','chrome_engine','--add-data','src;src','--add-data','chrome_engine;chrome_engine')
           python -m PyInstaller @common --windowed --name FoxProfileStudio --icon src/assets/icon.ico --distpath ../dist studio_launcher.py
           if ($LASTEXITCODE -ne 0) { throw 'GUI build failed' }
           python -m PyInstaller @common --console --name FoxProfileWorker --distpath ../worker-dist studio_worker.py
