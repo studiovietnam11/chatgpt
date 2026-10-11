@@ -62,6 +62,11 @@ def configure() -> Path:
 
 
 def main() -> None:
+    # PyInstaller --windowed sets stdout/stderr to None. Uvicorn assumes an isatty() stream.
+    if sys.stdout is None:
+        sys.stdout = log_file().open("a", encoding="utf-8", buffering=1)
+    if sys.stderr is None:
+        sys.stderr = log_file().open("a", encoding="utf-8", buffering=1)
     note("START argv=" + repr(sys.argv[1:]) + " executable=" + sys.executable)
     note("Windows=" + os.name + " frozen=" + str(getattr(sys, "frozen", False)))
     with log_file().open("a", encoding="utf-8") as h:
