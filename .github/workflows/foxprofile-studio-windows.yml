@@ -38,6 +38,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r work/requirements.txt
           python -m pip install -r scripts/foxprofile/requirements-build.txt
+          python -m pip install typer
           choco install innosetup --yes --no-progress
           python -m compileall -q work
       - name: Download Camoufox for Windows build
@@ -53,7 +54,7 @@ jobs:
         working-directory: work
         run: |
           $ErrorActionPreference = 'Stop'
-          $common = @('--noconfirm','--clean','--onedir','--paths','.','--collect-all','camoufox','--collect-all','flet','--collect-all','playwright','--collect-all','browserforge','--collect-submodules','mcp','--collect-submodules','chrome_engine','--add-data','src;src','--add-data','chrome_engine;chrome_engine')
+          $common = @('--noconfirm','--clean','--onedir','--paths','.','--collect-all','camoufox','--collect-all','flet','--collect-all','flet_desktop','--collect-all','playwright','--collect-all','browserforge','--collect-submodules','mcp.server','--collect-submodules','chrome_engine','--add-data','src;src','--add-data','chrome_engine;chrome_engine')
           python -m PyInstaller @common --windowed --name FoxProfileStudio --icon src/assets/icon.ico --distpath ../dist studio_launcher.py
           if ($LASTEXITCODE -ne 0) { throw 'GUI build failed' }
           python -m PyInstaller @common --console --name FoxProfileWorker --distpath ../worker-dist studio_worker.py
