@@ -1,0 +1,91 @@
+name: FoxProfile Studio Windows EXE
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/foxprofile-studio-windows.yml'
+      - 'scripts/foxprofile/**'
+permissions:
+  contents: read
+jobs:
+  build-windows:
+    runs-on: windows-2022
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout build configuration
+        uses: actions/checkout@v4
+      - name: Python x64
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+          cache: pip
+          cache-dependency-path: scripts/foxprofile/requirements-build.txt
+      - name: Fetch upstream FoxProfile 2.3.1
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Invoke-WebRequest -Uri 'https://github.com/chienbm98/foxprofile/archive/refs/tags/v2.3.1.zip' -OutFile 'upstream.zip'
+          Expand-Archive -LiteralPath 'upstream.zip' -DestinationPath 'download' -Force
+          Move-Item 'download/foxprofile-2.3.1' 'work'
+          Copy-Item 'scripts/foxprofile/studio_launcher.py' 'work/studio_launcher.py'
+          Copy-Item 'scripts/foxprofile/studio_worker.py' 'work/studio_worker.py'
+          Copy-Item 'scripts/foxprofile/frozen_process.py' 'work/src/services/browser/process.py'
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r work/requirements.txt
+          python -m pip install -r scripts/foxprofile/requirements-build.txt
+          choco install innosetup --yes --no-progress
+          python -m compileall -q work
+      - name: Download Camoufox for Windows build
+        working-directory: work
+        run: |
+          python -m camoufox fetch
+          $path = python -c 'from camoufox.pkgman import INSTALL_DIR; print(INSTALL_DIR)'
+          if ($LASTEXITCODE -ne 0) { throw 'Camoufox download failed' }
+          $path = ($path | Select-Object -Last 1).Trim()
+          if (-not (Test-Path -LiteralPath $path)) { throw "Camoufox data missing: $path" }
+          Set-Content -Path '../camoufox-path.txt' -Value $path
+      - name: Build GUI and browser worker with PyInstaller
+        working-directory: work
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $common = @('--noconfirm','--clean','--onedir','--paths','.','--collect-all','camoufox','--collect-all','flet','--collect-all','playwright','--collect-all','browserforge','--collect-submodules','mcp','--collect-submodules','chrome_engine','--add-data','src;src','--add-data','chrome_engine;chrome_engine')
+          python -m PyInstaller @common --windowed --name FoxProfileStudio --icon src/assets/icon.ico --distpath ../dist studio_launcher.py
+          if ($LASTEXITCODE -ne 0) { throw 'GUI build failed' }
+          python -m PyInstaller @common --console --name FoxProfileWorker --distpath ../worker-dist studio_worker.py
+          if ($LASTEXITCODE -ne 0) { throw 'Worker build failed' }
+          New-Item -ItemType Directory -Path '../dist/FoxProfileStudio/worker' -Force | Out-Null
+          Copy-Item '../worker-dist/FoxProfileWorker/*' '../dist/FoxProfileStudio/worker' -Recurse -Force
+          $browser = (Get-Content '../camoufox-path.txt' -Raw).Trim()
+          Copy-Item -LiteralPath $browser -Destination '../dist/FoxProfileStudio/browser-runtime' -Recurse -Force
+          if (-not (Test-Path '../dist/FoxProfileStudio/FoxProfileStudio.exe')) { throw 'GUI EXE missing' }
+          if (-not (Test-Path '../dist/FoxProfileStudio/worker/FoxProfileWorker.exe')) { throw 'Worker EXE missing' }
+      - name: Frozen smoke test
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & ./dist/FoxProfileStudio/worker/FoxProfileWorker.exe --self-test
+          if ($LASTEXITCODE -ne 0) { throw 'Worker smoke test failed' }
+          & ./dist/FoxProfileStudio/FoxProfileStudio.exe --self-test
+          if ($LASTEXITCODE -ne 0) { throw 'GUI smoke test failed' }
+      - name: Create one-file Windows installer
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw 'Inno Setup compiler missing' }
+          & $iscc 'scripts/foxprofile/FoxProfileStudio.iss'
+          if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed' }
+          $exe='release/FoxProfileStudio-Setup-2.5.1-Win64.exe'
+          if (-not (Test-Path $exe)) { throw 'Final installer missing' }
+          Get-FileHash $exe -Algorithm SHA256
+          Get-Item $exe | Select-Object Name,Length
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: FoxProfileStudio-Setup-2.5.1-Win64
+          path: release/FoxProfileStudio-Setup-2.5.1-Win64.exe
+          if-no-files-found: error
+          retention-days: 14
