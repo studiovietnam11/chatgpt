@@ -72,6 +72,21 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Worker smoke test failed' }
           & ./dist/FoxProfileStudio/FoxProfileStudio.exe --self-test
           if ($LASTEXITCODE -ne 0) { throw 'GUI smoke test failed' }
+      - name: Test real desktop startup on Windows
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $app = (Resolve-Path 'dist/FoxProfileStudio/FoxProfileStudio.exe').Path
+          $proc = Start-Process -FilePath $app -ArgumentList '--smoke-desktop' -PassThru
+          Start-Sleep -Seconds 18
+          $proc.Refresh()
+          $log = Join-Path $env:LOCALAPPDATA 'FoxProfileStudio/logs/startup-latest.log'
+          if (Test-Path $log) { Get-Content $log -Tail 100 }
+          if ($proc.HasExited) { throw "Application exited immediately (code $($proc.ExitCode))" }
+          if (-not (Test-Path $log)) { throw 'Startup log not generated' }
+          $content = Get-Content $log -Raw
+          if ($content -match 'FATAL_EXCEPTION|UI_EXITED_NORMALLY') { throw 'Desktop stopped or crashed during smoke test' }
+          if ($content -notmatch 'about to start FastAPI and Flet desktop') { throw 'Desktop entrypoint was not reached' }
+          Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
       - name: Create one-file Windows installer
         run: |
           $ErrorActionPreference = 'Stop'
@@ -79,14 +94,14 @@ jobs:
           if (-not (Test-Path $iscc)) { throw 'Inno Setup compiler missing' }
           & $iscc 'scripts/foxprofile/FoxProfileStudio.iss'
           if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed' }
-          $exe='release/FoxProfileStudio-Setup-2.5.1-Win64.exe'
+          $exe='release/FoxProfileStudio-Setup-2.5.2-Win64.exe'
           if (-not (Test-Path $exe)) { throw 'Final installer missing' }
           Get-FileHash $exe -Algorithm SHA256
           Get-Item $exe | Select-Object Name,Length
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: FoxProfileStudio-Setup-2.5.1-Win64
-          path: release/FoxProfileStudio-Setup-2.5.1-Win64.exe
+          name: FoxProfileStudio-Setup-2.5.2-Win64
+          path: release/FoxProfileStudio-Setup-2.5.2-Win64.exe
           if-no-files-found: error
           retention-days: 14
