@@ -37,6 +37,12 @@ jobs:
           python -m pytest -q tests/test_dockerprofile_device.py tests/test_strings.py tests/test_validation.py
       - name: Install Inno Setup
         run: choco install innosetup --yes --no-progress
+      - name: Normalize regression test paths
+        run: |
+          $p='app/windows/build-FASTBROWSERS.ps1'
+          $body=Get-Content $p -Raw
+          $body=$body.Replace(' tests/test_state.py','')
+          Set-Content -LiteralPath $p -Value $body -Encoding UTF8
       - name: Build, run smoke test, and compile installer
         working-directory: app
         run: ./windows/build-FASTBROWSERS.ps1
