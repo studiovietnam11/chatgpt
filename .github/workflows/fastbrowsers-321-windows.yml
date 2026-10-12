@@ -37,6 +37,7 @@ import base64, zlib
 from pathlib import Path
 data = Path("../scripts/fastbrowsers/apply-321.zlib.b64").read_text(encoding="ascii")
 code = zlib.decompress(base64.b64decode(data)).decode("utf-8")
+code = code.replace("root=Path('app')", "root=Path('.')", 1)
 exec(compile(code, "<fastbrowsers-321-patch>", "exec"))
 '@ | Set-Content -Path app/_apply_321.py -Encoding UTF8
           Push-Location app
