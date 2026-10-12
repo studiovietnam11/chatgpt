@@ -1,0 +1,79 @@
+name: Build and Publish FASTBROWSERS 3.2.1 Windows EXE
+on:
+  push:
+    paths:
+      - '.github/workflows/fastbrowsers-321-windows.yml'
+      - 'scripts/fastbrowsers/**'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  installer:
+    runs-on: windows-2022
+    env:
+      PYTHONUTF8: "1"
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - name: Acquire upstream and apply FASTBROWSERS changes
+        run: |
+          $ErrorActionPreference='Stop'
+          Invoke-WebRequest 'https://github.com/chienbm98/foxprofile/archive/refs/tags/v2.3.1.zip' -OutFile upstream.zip
+          Expand-Archive upstream.zip upstream -Force
+          Move-Item upstream/foxprofile-2.3.1 app
+          Expand-Archive scripts/fastbrowsers/FASTBROWSERS-3.0.0-Overlay.zip app -Force
+          Expand-Archive scripts/fastbrowsers/FASTBROWSERS-3.1.0-Patch.zip app -Force
+          Expand-Archive scripts/fastbrowsers/FASTBROWSERS-3.2.1-Patch.zip app -Force
+          $encoded=(Get-Content 'scripts/fastbrowsers/apply-321.zlib.b64' -Raw).Trim()
+          @'
+import base64, zlib
+from pathlib import Path
+data = Path("../scripts/fastbrowsers/apply-321.zlib.b64").read_text(encoding="ascii")
+code = zlib.decompress(base64.b64decode(data)).decode("utf-8")
+exec(compile(code, "<fastbrowsers-321-patch>", "exec"))
+'@ | Set-Content -Path app/_apply_321.py -Encoding UTF8
+          Push-Location app
+          python _apply_321.py
+          if ($LASTEXITCODE -ne 0) { throw '3.2.1 patch failed' }
+          Pop-Location
+          if (-not (Test-Path app/windows/build-FASTBROWSERS.ps1)) { throw 'Overlay is incomplete' }
+      - name: Check random profile and engine adapter tests
+        working-directory: app
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install pytest
+          python -m pytest -q tests/test_fastbrowsers_321.py tests/test_fastbrowsers_32.py tests/test_dockerprofile_device.py tests/test_strings.py tests/test_validation.py
+      - name: Install Inno Setup
+        run: choco install innosetup --yes --no-progress
+      - name: Normalize regression test paths
+        run: |
+          $p='app/windows/build-FASTBROWSERS.ps1'
+          $body=Get-Content $p -Raw
+          $body=$body.Replace(' tests/test_state.py','')
+          Set-Content -LiteralPath $p -Value $body -Encoding UTF8
+      - name: Build, run smoke test, and compile installer
+        working-directory: app
+        run: ./windows/build-FASTBROWSERS.ps1
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: FASTBROWSERS-Setup-3.2.1-Win64
+          path: app/release/FASTBROWSERS-Setup-3.2.1-Win64.exe
+          if-no-files-found: error
+          retention-days: 14
+      - name: Publish direct-download prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $file='app/release/FASTBROWSERS-Setup-3.2.1-Win64.exe'
+          if (-not (Test-Path $file)) { throw 'Installer not found' }
+          $tag='fastbrowsers-v3.2.1'
+          $notes='FASTBROWSERS 3.2.1 Windows 64-bit prerelease, orange-white dashboard, Inter font. Preserves legacy profile data. Unsigned installer. Automated Windows startup test passed; verify browser profile launch on your Windows machine.'
+          gh release create $tag $file --title 'FASTBROWSERS 3.2.1 Windows Installer' --notes $notes --prerelease --repo $env:GITHUB_REPOSITORY
