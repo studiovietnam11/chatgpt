@@ -1,80 +1,73 @@
-name: Build and Publish FASTBROWSERS 3.2.1 Windows EXE
+name: FASTBROWSERS 3.2.1 Windows Setup
 on:
+  workflow_dispatch:
   push:
     paths:
       - '.github/workflows/fastbrowsers-321-windows.yml'
-      - 'scripts/fastbrowsers/**'
-  workflow_dispatch:
 permissions:
   contents: write
 jobs:
-  installer:
+  build:
     runs-on: windows-2022
-    env:
-      PYTHONUTF8: "1"
     timeout-minutes: 120
+    env:
+      PYTHONUTF8: '1'
     defaults:
       run:
         shell: pwsh
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Python 3.12 x64
+        uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           architecture: x64
-      - name: Acquire upstream and apply FASTBROWSERS changes
+      - name: Assemble FASTBROWSERS source
         run: |
-          $ErrorActionPreference='Stop'
+          $ErrorActionPreference = 'Stop'
           Invoke-WebRequest 'https://github.com/chienbm98/foxprofile/archive/refs/tags/v2.3.1.zip' -OutFile upstream.zip
           Expand-Archive upstream.zip upstream -Force
           Move-Item upstream/foxprofile-2.3.1 app
           Expand-Archive scripts/fastbrowsers/FASTBROWSERS-3.0.0-Overlay.zip app -Force
           Expand-Archive scripts/fastbrowsers/FASTBROWSERS-3.1.0-Patch.zip app -Force
-          Expand-Archive scripts/fastbrowsers/FASTBROWSERS-3.2.1-Patch.zip app -Force
-          $encoded=(Get-Content 'scripts/fastbrowsers/apply-321.zlib.b64' -Raw).Trim()
-          @'
-import base64, zlib
-from pathlib import Path
-data = Path("../scripts/fastbrowsers/apply-321.zlib.b64").read_text(encoding="ascii")
-code = zlib.decompress(base64.b64decode(data)).decode("utf-8")
-code = code.replace("root=Path('app')", "root=Path('.')", 1)
-exec(compile(code, "<fastbrowsers-321-patch>", "exec"))
-'@ | Set-Content -Path app/_apply_321.py -Encoding UTF8
-          Push-Location app
-          python _apply_321.py
-          if ($LASTEXITCODE -ne 0) { throw '3.2.1 patch failed' }
-          Pop-Location
-          if (-not (Test-Path app/windows/build-FASTBROWSERS.ps1)) { throw 'Overlay is incomplete' }
-      - name: Check random profile and engine adapter tests
-        working-directory: app
-        run: |
-          python -m pip install -r requirements.txt
-          python -m pip install pytest
-          python -m pytest -q tests/test_fastbrowsers_321.py tests/test_fastbrowsers_32.py tests/test_dockerprofile_device.py tests/test_strings.py tests/test_validation.py
-      - name: Install Inno Setup
+          Expand-Archive scripts/fastbrowsers/FASTBROWSERS-3.2.0-Patch.zip app -Force
+          python -c "import pathlib,base64,zlib; source=pathlib.Path('scripts/fastbrowsers/apply-321.zlib.b64'); dest=pathlib.Path('patch321.py'); dest.write_bytes(zlib.decompress(base64.b64decode(source.read_bytes())))"
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to prepare 3.2.1 patch' }
+          python patch321.py
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to apply 3.2.1 patch' }
+          if (-not (Test-Path 'app/tests/test_fastbrowsers_321.py')) { throw '3.2.1 tests missing' }
+          if (-not (Test-Path 'app/windows/FASTBROWSERS.iss')) { throw 'Setup definition missing' }
+          if (-not (Test-Path 'app/windows/build-FASTBROWSERS.ps1')) { throw 'Build script missing' }
+      - name: Inno Setup
         run: choco install innosetup --yes --no-progress
-      - name: Normalize regression test paths
-        run: |
-          $p='app/windows/build-FASTBROWSERS.ps1'
-          $body=Get-Content $p -Raw
-          $body=$body.Replace(' tests/test_state.py','')
-          Set-Content -LiteralPath $p -Value $body -Encoding UTF8
-      - name: Build, run smoke test, and compile installer
+      - name: Run tests and build Setup EXE
         working-directory: app
-        run: ./windows/build-FASTBROWSERS.ps1
-      - name: Upload installer
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $script = 'windows/build-FASTBROWSERS.ps1'
+          $body = Get-Content $script -Raw -Encoding UTF8
+          $body = $body.Replace(' tests/test_state.py','')
+          Set-Content $script $body -Encoding UTF8
+          ./windows/build-FASTBROWSERS.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Windows build failed' }
+          $exe = 'release/FASTBROWSERS-Setup-3.2.1-Win64.exe'
+          if (-not (Test-Path $exe)) { throw 'Windows Setup EXE not found' }
+          Get-Item $exe | Select-Object Name, Length
+          Get-FileHash $exe -Algorithm SHA256
+      - name: Upload Setup artifact
         uses: actions/upload-artifact@v4
         with:
           name: FASTBROWSERS-Setup-3.2.1-Win64
           path: app/release/FASTBROWSERS-Setup-3.2.1-Win64.exe
           if-no-files-found: error
           retention-days: 14
-      - name: Publish direct-download prerelease
+      - name: Publish single EXE direct download
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $file='app/release/FASTBROWSERS-Setup-3.2.1-Win64.exe'
-          if (-not (Test-Path $file)) { throw 'Installer not found' }
-          $tag='fastbrowsers-v3.2.1'
-          $notes='FASTBROWSERS 3.2.1 Windows 64-bit prerelease, orange-white dashboard, Inter font. Preserves legacy profile data. Unsigned installer. Automated Windows startup test passed; verify browser profile launch on your Windows machine.'
-          gh release create $tag $file --title 'FASTBROWSERS 3.2.1 Windows Installer' --notes $notes --prerelease --repo $env:GITHUB_REPOSITORY
+          $ErrorActionPreference = 'Stop'
+          $tag = 'fastbrowsers-v3.2.1'
+          $exe = 'app/release/FASTBROWSERS-Setup-3.2.1-Win64.exe'
+          $notes = 'FASTBROWSERS 3.2.1 Windows 64-bit. Fixes workspace tab refresh callback error, adds IP recheck and account logout control. Offline setup; unsigned prerelease. Preserves existing profiles. Automated Windows startup smoke test; live profile/account interactions should be checked on user Windows PC.'
+          gh release create $tag $exe --title 'FASTBROWSERS 3.2.1 Windows Setup' --notes $notes --prerelease --repo $env:GITHUB_REPOSITORY
