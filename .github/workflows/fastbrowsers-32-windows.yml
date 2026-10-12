@@ -10,6 +10,8 @@ permissions:
 jobs:
   installer:
     runs-on: windows-2022
+    env:
+      PYTHONUTF8: "1"
     timeout-minutes: 120
     defaults:
       run:
